@@ -70,6 +70,7 @@ import io.fand.api.item.component.VillagerVariantKey;
 import io.fand.api.item.component.WolfSoundVariantKey;
 import io.fand.api.item.component.WolfVariantKey;
 import io.fand.api.item.component.ZombieNautilusVariantKey;
+import io.fand.api.persistence.PersistentDataContainer;
 import io.fand.api.world.DamageTypeKey;
 import io.fand.api.world.sound.JukeboxSongKey;
 import io.fand.api.world.sound.SoundKey;
@@ -94,6 +95,7 @@ public record ItemStack(@Nullable ItemType type, int amount, ItemComponents comp
 
     /** Sentinel empty stack (type {@code null}, amount 0). Prefer {@link #isEmpty()} over null checks. */
     public static final ItemStack EMPTY = new ItemStack(null, 0, ItemComponents.EMPTY);
+    private static final String PERSISTENT_DATA_KEY = "fand:persistent_data";
 
     public ItemStack(ItemType type, int amount) {
         this(type, amount, ItemComponents.EMPTY);
@@ -199,6 +201,41 @@ public record ItemStack(@Nullable ItemType type, int amount, ItemComponents comp
 
     public ItemStack withoutCustomData() {
         return withoutComponent(ItemComponentKeys.CUSTOM_DATA);
+    }
+
+    /**
+     * Plugin-owned persistent data stored inside the vanilla custom-data
+     * component. Keys are namespaced Adventure keys.
+     */
+    public PersistentDataContainer persistentData() {
+        return customData()
+                .map(data -> data.get(PERSISTENT_DATA_KEY))
+                .filter(JsonElement::isJsonObject)
+                .map(JsonElement::getAsJsonObject)
+                .map(PersistentDataContainer::new)
+                .orElse(PersistentDataContainer.EMPTY);
+    }
+
+    public ItemStack withPersistentData(PersistentDataContainer data) {
+        Objects.requireNonNull(data, "data");
+        if (isEmpty()) {
+            return EMPTY;
+        }
+        var customData = customData().orElseGet(JsonObject::new);
+        if (data.empty()) {
+            customData.remove(PERSISTENT_DATA_KEY);
+        } else {
+            customData.add(PERSISTENT_DATA_KEY, data.toJson());
+        }
+        return customData.size() == 0 ? withoutCustomData() : withCustomData(customData);
+    }
+
+    public ItemStack withPersistentData(Key key, JsonElement value) {
+        return withPersistentData(persistentData().with(key, value));
+    }
+
+    public ItemStack withoutPersistentData(Key key) {
+        return withPersistentData(persistentData().without(key));
     }
 
     public Optional<Integer> maxStackSizeOverride() {

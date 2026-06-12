@@ -86,6 +86,17 @@ public interface Player extends LivingEntity, CommandSender, PermissionSubject {
     /** Plays a sound at {@code location} for this player. No-op if already offline or in another world. */
     void playSound(Location location, SoundEffect sound);
 
+    default Location eyeLocation() {
+        var location = location();
+        return new Location(
+                location.world(),
+                location.x(),
+                location.y() + Math.max(0.0, height() * 0.85),
+                location.z(),
+                location.yaw(),
+                location.pitch());
+    }
+
     /** Spawns a single particle at {@code location} for this player. No-op if offline or in another world. */
     default void spawnParticle(Location location, ParticleEffect effect) {
         spawnParticle(location, effect, ParticleEmission.SINGLE);
@@ -195,6 +206,50 @@ public interface Player extends LivingEntity, CommandSender, PermissionSubject {
      * already flying forces them to drop. Marshals to the server thread.
      */
     void setAllowFlight(boolean allow);
+
+    default float flySpeed() {
+        throw new UnsupportedOperationException("Fly speed is not supported");
+    }
+
+    default void setFlySpeed(float speed) {
+        throw new UnsupportedOperationException("Fly speed is not supported");
+    }
+
+    default float walkSpeed() {
+        throw new UnsupportedOperationException("Walk speed is not supported");
+    }
+
+    default void setWalkSpeed(float speed) {
+        throw new UnsupportedOperationException("Walk speed is not supported");
+    }
+
+    default void sendBlockChange(Location location, io.fand.api.block.BlockType type) {
+        throw new UnsupportedOperationException("Client-side block changes are not supported");
+    }
+
+    default void hideEntity(Player viewer, Entity entity) {
+        java.util.Objects.requireNonNull(viewer, "viewer");
+        java.util.Objects.requireNonNull(entity, "entity");
+        throw new UnsupportedOperationException("Per-viewer entity hiding is not supported");
+    }
+
+    default void showEntity(Player viewer, Entity entity) {
+        java.util.Objects.requireNonNull(viewer, "viewer");
+        java.util.Objects.requireNonNull(entity, "entity");
+        throw new UnsupportedOperationException("Per-viewer entity hiding is not supported");
+    }
+
+    default void openBook(ItemStack book) {
+        throw new UnsupportedOperationException("Opening books is not supported");
+    }
+
+    default void openSign(Location location) {
+        throw new UnsupportedOperationException("Opening signs is not supported");
+    }
+
+    default void respawn() {
+        throw new UnsupportedOperationException("Forced respawn is not supported");
+    }
 
     /** Personal respawn location, if one is set. */
     Optional<RespawnLocation> respawnLocation();

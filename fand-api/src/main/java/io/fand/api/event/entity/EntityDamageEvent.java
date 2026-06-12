@@ -3,8 +3,11 @@ package io.fand.api.event.entity;
 import io.fand.api.entity.LivingEntity;
 import io.fand.api.event.Cancellable;
 import io.fand.api.event.Event;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import net.kyori.adventure.key.Key;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -20,13 +23,18 @@ import org.jspecify.annotations.Nullable;
 public class EntityDamageEvent implements Event, Cancellable {
 
     private final LivingEntity entity;
-    private final String cause;
+    private final DamageCause cause;
     private final @Nullable LivingEntity directEntity;
     private final @Nullable LivingEntity attacker;
+    private final EnumMap<DamageModifier, Double> modifiers;
     private double amount;
     private boolean cancelled;
 
     public EntityDamageEvent(LivingEntity entity, String cause, double amount) {
+        this(entity, DamageCause.of(cause), amount, null, null);
+    }
+
+    public EntityDamageEvent(LivingEntity entity, DamageCause cause, double amount) {
         this(entity, cause, amount, null, null);
     }
 
@@ -36,11 +44,22 @@ public class EntityDamageEvent implements Event, Cancellable {
             double amount,
             @Nullable LivingEntity directEntity,
             @Nullable LivingEntity attacker) {
+        this(entity, DamageCause.of(cause), amount, directEntity, attacker);
+    }
+
+    public EntityDamageEvent(
+            LivingEntity entity,
+            DamageCause cause,
+            double amount,
+            @Nullable LivingEntity directEntity,
+            @Nullable LivingEntity attacker) {
         this.entity = Objects.requireNonNull(entity, "entity");
         this.cause = Objects.requireNonNull(cause, "cause");
         this.directEntity = directEntity;
         this.attacker = attacker;
         this.amount = amount;
+        this.modifiers = new EnumMap<>(DamageModifier.class);
+        this.modifiers.put(DamageModifier.BASE, amount);
     }
 
     public LivingEntity entity() {
@@ -49,7 +68,17 @@ public class EntityDamageEvent implements Event, Cancellable {
 
     /** Vanilla damage-type identifier (e.g. {@code minecraft:fall}, {@code minecraft:player_attack}). */
     public String cause() {
+        return cause.asString();
+    }
+
+    /** Typed vanilla damage cause. */
+    public DamageCause damageCause() {
         return cause;
+    }
+
+    /** Typed vanilla damage type key. */
+    public Key causeKey() {
+        return cause.key();
     }
 
     /**
@@ -72,6 +101,21 @@ public class EntityDamageEvent implements Event, Cancellable {
 
     public void setAmount(double amount) {
         this.amount = amount;
+        this.modifiers.clear();
+        this.modifiers.put(DamageModifier.BASE, amount);
+    }
+
+    public Map<DamageModifier, Double> modifiers() {
+        return Map.copyOf(modifiers);
+    }
+
+    public double modifier(DamageModifier modifier) {
+        return modifiers.getOrDefault(Objects.requireNonNull(modifier, "modifier"), 0.0);
+    }
+
+    public void setModifier(DamageModifier modifier, double amount) {
+        modifiers.put(Objects.requireNonNull(modifier, "modifier"), amount);
+        this.amount = modifiers.values().stream().mapToDouble(Double::doubleValue).sum();
     }
 
     @Override

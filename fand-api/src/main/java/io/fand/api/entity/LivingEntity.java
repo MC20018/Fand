@@ -82,4 +82,37 @@ public interface LivingEntity extends Entity {
 
     /** Sets the item equipped in {@code slot}. Empty stacks clear the slot. Marshals to the server thread. */
     void setEquipment(ItemEquipmentSlot slot, ItemStack item);
+
+    default int remainingAir() {
+        throw new UnsupportedOperationException("Air supply is not supported");
+    }
+
+    default void setRemainingAir(int ticks) {
+        throw new UnsupportedOperationException("Air supply is not supported");
+    }
+
+    default int maximumAir() {
+        throw new UnsupportedOperationException("Maximum air supply is not supported");
+    }
+
+    default int freezeTicks() {
+        throw new UnsupportedOperationException("Freeze ticks are not supported");
+    }
+
+    default void setFreezeTicks(int ticks) {
+        throw new UnsupportedOperationException("Freeze ticks are not supported");
+    }
+
+    default int invulnerableTicks() {
+        throw new UnsupportedOperationException("Invulnerable ticks are not supported");
+    }
+
+    default void setInvulnerableTicks(int ticks) {
+        throw new UnsupportedOperationException("Invulnerable ticks are not supported");
+    }
+
+    default boolean lineOfSight(Entity target) {
+        java.util.Objects.requireNonNull(target, "target");
+        return false;
+    }
 }

@@ -549,6 +549,11 @@ public interface World extends ForwardingAudience {
         return new ChunkSnapshot(this, chunkX, chunkZ, chunkLoaded(chunkX, chunkZ), chunkForceLoaded(chunkX, chunkZ), entityCount(chunkX, chunkZ));
     }
 
+    /** Asynchronous lightweight chunk state snapshot. */
+    default CompletableFuture<ChunkSnapshot> chunkSnapshotAsync(int chunkX, int chunkZ) {
+        return CompletableFuture.completedFuture(chunkSnapshot(chunkX, chunkZ));
+    }
+
     /** Snapshot of persisted component-bearing blocks in this world. */
     default Collection<? extends io.fand.api.block.Block> blocksWith(DataComponentKey<?> key) {
         java.util.Objects.requireNonNull(key, "key");

@@ -18,6 +18,16 @@ public interface PlayerAccessService {
 
     PlayerProfile offlineProfile(String name);
 
+    default CompletableFuture<Optional<OfflinePlayer>> offlinePlayer(UUID uniqueId) {
+        return CompletableFuture.completedFuture(Optional.empty());
+    }
+
+    default CompletableFuture<Optional<OfflinePlayer>> offlinePlayer(String name) {
+        return profile(name).thenCompose(profile -> profile
+                .map(value -> offlinePlayer(value.uniqueId()))
+                .orElseGet(() -> CompletableFuture.completedFuture(Optional.empty())));
+    }
+
     Collection<BanEntry> bans();
 
     Optional<BanEntry> ban(PlayerProfile profile);

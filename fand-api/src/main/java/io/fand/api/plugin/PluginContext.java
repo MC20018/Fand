@@ -7,6 +7,7 @@ import io.fand.api.customblock.CustomBlockRegistry;
 import io.fand.api.customitem.CustomItemRegistry;
 import io.fand.api.event.EventBus;
 import io.fand.api.gui.GuiService;
+import io.fand.api.messaging.PluginMessaging;
 import io.fand.api.packet.PacketRegistry;
 import io.fand.api.permission.PermissionService;
 import io.fand.api.recipe.RecipeRegistry;
@@ -43,6 +44,11 @@ public interface PluginContext {
 
     /** Packet registry scoped to this plugin's lifecycle. */
     PacketRegistry packets();
+
+    /** Standard plugin messaging channels scoped to this plugin's lifecycle. */
+    default PluginMessaging pluginMessaging() {
+        return PluginMessaging.empty();
+    }
 
     /** Custom item registry scoped to this plugin's lifecycle and namespace. */
     CustomItemRegistry customItems();

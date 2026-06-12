@@ -41,6 +41,7 @@ public final class PluginCommandRegistry implements CommandRegistry {
                 descriptor.label(),
                 descriptor.subcommands(),
                 descriptor.arguments(),
+                descriptor.typedArguments(),
                 descriptor.aliases(),
                 descriptor.permission()
         );

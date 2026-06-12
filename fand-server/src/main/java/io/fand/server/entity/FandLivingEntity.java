@@ -151,4 +151,45 @@ public class FandLivingEntity extends FandEntity implements LivingEntity {
                 EquipmentSlots.toVanilla(slot),
                 FandItemStacks.toVanilla(item)));
     }
+
+    @Override
+    public int remainingAir() {
+        return handle().getAirSupply();
+    }
+
+    @Override
+    public void setRemainingAir(int ticks) {
+        runOnServerThread(() -> handle().setAirSupply(Math.max(0, ticks)));
+    }
+
+    @Override
+    public int maximumAir() {
+        return handle().getMaxAirSupply();
+    }
+
+    @Override
+    public int freezeTicks() {
+        return handle().getTicksFrozen();
+    }
+
+    @Override
+    public void setFreezeTicks(int ticks) {
+        runOnServerThread(() -> handle().setTicksFrozen(Math.max(0, ticks)));
+    }
+
+    @Override
+    public int invulnerableTicks() {
+        return handle().invulnerableTime;
+    }
+
+    @Override
+    public void setInvulnerableTicks(int ticks) {
+        runOnServerThread(() -> handle().invulnerableTime = Math.max(0, ticks));
+    }
+
+    @Override
+    public boolean lineOfSight(io.fand.api.entity.Entity target) {
+        java.util.Objects.requireNonNull(target, "target");
+        return handle().hasLineOfSight(EntityHandles.unwrap(target));
+    }
 }

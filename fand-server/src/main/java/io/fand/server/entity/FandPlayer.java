@@ -27,6 +27,7 @@ import io.fand.api.world.particle.ParticleEffect;
 import io.fand.api.world.particle.ParticleEmission;
 import io.fand.api.world.sound.SoundEffect;
 import io.fand.server.audience.BossBarTracker;
+import io.fand.server.block.FandBlockType;
 import io.fand.server.audience.PacketAudience;
 import io.fand.server.command.AdventureBridge;
 import io.fand.server.component.EntityComponentStorage;
@@ -58,6 +59,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.common.ClientboundResourcePackPopPacket;
 import net.minecraft.network.protocol.common.ClientboundResourcePackPushPacket;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerAbilitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
@@ -69,6 +71,8 @@ import net.minecraft.stats.Stats;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.UseCooldown;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.storage.LevelData;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -347,6 +351,13 @@ public final class FandPlayer implements Player {
                 SoundEffects.playTo(handle, location, sound);
             }
         });
+    }
+
+    @Override
+    public Location eyeLocation() {
+        var handle = bound.handle;
+        var world = registry.wrapLevel(handle.level());
+        return new Location(world, handle.getX(), handle.getEyeY(), handle.getZ(), handle.getYRot(), handle.getXRot());
     }
 
     @Override
@@ -1056,6 +1067,85 @@ public final class FandPlayer implements Player {
                 abilities.flying = false;
             }
             pushAbilities();
+        });
+    }
+
+    @Override
+    public float flySpeed() {
+        return bound.handle.getAbilities().getFlyingSpeed();
+    }
+
+    @Override
+    public void setFlySpeed(float speed) {
+        runOnServerThread(() -> {
+            bound.handle.getAbilities().setFlyingSpeed(speed);
+            pushAbilities();
+        });
+    }
+
+    @Override
+    public float walkSpeed() {
+        return bound.handle.getAbilities().getWalkingSpeed();
+    }
+
+    @Override
+    public void setWalkSpeed(float speed) {
+        runOnServerThread(() -> {
+            bound.handle.getAbilities().setWalkingSpeed(speed);
+            pushAbilities();
+        });
+    }
+
+    @Override
+    public void sendBlockChange(Location location, io.fand.api.block.BlockType type) {
+        Objects.requireNonNull(location, "location");
+        Objects.requireNonNull(type, "type");
+        runOnServerThread(() -> {
+            var handle = bound.handle;
+            if (handle.connection == null || !sameWorld(location, handle.level())) {
+                return;
+            }
+            var pos = BlockPos.containing(location.x(), location.y(), location.z());
+            var state = FandBlockType.unwrap(type).defaultBlockState();
+            handle.connection.send(new ClientboundBlockUpdatePacket(pos, state));
+        });
+    }
+
+    @Override
+    public void openBook(ItemStack book) {
+        Objects.requireNonNull(book, "book");
+        runOnServerThread(() -> {
+            var handle = bound.handle;
+            if (handle.connection == null) {
+                return;
+            }
+            var inventory = handle.getInventory();
+            var selectedSlot = inventory.getSelectedSlot();
+            var previous = inventory.getSelectedItem().copy();
+            var vanillaBook = FandItemStacks.toVanilla(book);
+            inventory.setItem(selectedSlot, vanillaBook);
+            try {
+                handle.containerMenu.broadcastChanges();
+                handle.openItemGui(vanillaBook, InteractionHand.MAIN_HAND);
+            } finally {
+                inventory.setItem(selectedSlot, previous);
+                handle.containerMenu.broadcastChanges();
+            }
+        });
+    }
+
+    @Override
+    public void openSign(Location location) {
+        Objects.requireNonNull(location, "location");
+        runOnServerThread(() -> {
+            var handle = bound.handle;
+            if (!sameWorld(location, handle.level())) {
+                return;
+            }
+            var pos = BlockPos.containing(location.x(), location.y(), location.z());
+            if (handle.level().getBlockEntity(pos) instanceof SignBlockEntity sign) {
+                handle.openTextEdit(sign, true);
+            }
         });
     }
 

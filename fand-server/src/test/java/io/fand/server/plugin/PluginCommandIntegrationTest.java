@@ -2,6 +2,9 @@ package io.fand.server.plugin;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.fand.api.command.CommandArgument;
+import io.fand.api.command.CommandArgumentType;
+import io.fand.api.command.CommandDescriptor;
 import io.fand.server.command.CommandManager;
 import io.fand.server.command.CommandTreeBridge;
 import io.fand.server.event.EventDispatcher;
@@ -22,6 +25,29 @@ final class PluginCommandIntegrationTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void scopedPluginCommandsPreserveTypedArguments() {
+        var commands = new CommandManager(new PermissionManager());
+        var registry = new PluginCommandRegistry(commands, new PluginResourceTracker(), "demo");
+
+        registry.register(
+                new CommandDescriptor(
+                        "ignored",
+                        "give",
+                        List.of(),
+                        List.of("target"),
+                        List.of(CommandArgument.players("target")),
+                        List.of(),
+                        null),
+                (sender, label, args) -> {},
+                (sender, label, args) -> List.of());
+
+        var descriptor = commands.lookup("demo:give").orElseThrow().descriptor();
+        assertThat(descriptor.namespace()).isEqualTo("demo");
+        assertThat(descriptor.typedArguments()).hasSize(1);
+        assertThat(descriptor.typedArguments().getFirst().type()).isEqualTo(CommandArgumentType.PLAYERS);
+    }
 
     @Test
     void pluginAnnotatedCommandExecutesCompletesAndUnregistersOnDisable() throws Exception {

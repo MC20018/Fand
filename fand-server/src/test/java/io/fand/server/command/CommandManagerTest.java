@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.fand.api.command.CommandCompleter;
+import io.fand.api.command.CommandArgument;
 import io.fand.api.command.CommandDescriptor;
 import io.fand.api.command.CommandExecutor;
 import io.fand.api.command.CommandSender;
@@ -94,6 +95,29 @@ final class CommandManagerTest {
         var manager = new CommandManager(new PermissionManager());
         assertThatThrownBy(() -> manager.register(descriptor("Bad Ns", "reload"), noop(), completer()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void preservesTypedArgumentsDuringNormalization() {
+        var manager = new CommandManager(new PermissionManager());
+        manager.register(
+                new CommandDescriptor(
+                        "FAND",
+                        "Hello",
+                        List.of("Reload"),
+                        List.of("Target"),
+                        List.of(CommandArgument.players("Targets").asOptional()),
+                        List.of("Alias"),
+                        null),
+                noop(),
+                completer());
+
+        var command = manager.lookup("hello").orElseThrow();
+        assertThat(command.descriptor().typedArguments()).hasSize(1);
+        var argument = command.descriptor().typedArguments().getFirst();
+        assertThat(argument.name()).isEqualTo("targets");
+        assertThat(argument.optional()).isTrue();
+        assertThat(argument.type()).isEqualTo(io.fand.api.command.CommandArgumentType.PLAYERS);
     }
 
     private static CommandDescriptor descriptor(String namespace, String label) {

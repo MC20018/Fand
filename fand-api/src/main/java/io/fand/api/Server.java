@@ -3,11 +3,16 @@ package io.fand.api;
 import io.fand.api.command.CommandRegistry;
 import io.fand.api.customblock.CustomBlockRegistry;
 import io.fand.api.customitem.CustomItemRegistry;
+import io.fand.api.advancement.AdvancementRegistry;
+import io.fand.api.enchantment.EnchantmentRegistry;
 import io.fand.api.entity.EntityKey;
 import io.fand.api.entity.Player;
 import io.fand.api.event.EventBus;
 import io.fand.api.gui.GuiService;
 import io.fand.api.lifecycle.LifecyclePhase;
+import io.fand.api.loot.LootTableService;
+import io.fand.api.map.MapService;
+import io.fand.api.messaging.PluginMessaging;
 import io.fand.api.performance.ServerPerformance;
 import io.fand.api.packet.PacketRegistry;
 import io.fand.api.permission.PermissionService;
@@ -16,6 +21,8 @@ import io.fand.api.plugin.PluginManager;
 import io.fand.api.recipe.RecipeRegistry;
 import io.fand.api.scheduler.Scheduler;
 import io.fand.api.scoreboard.ScoreboardService;
+import io.fand.api.structure.StructureService;
+import io.fand.api.tag.TagRegistry;
 import io.fand.api.world.World;
 import io.fand.api.world.WorldCreateOptions;
 import io.fand.api.world.WorldTemplate;
@@ -75,6 +82,35 @@ public interface Server extends ForwardingAudience {
     /** Global custom block registry. Prefer {@link io.fand.api.plugin.PluginContext#customBlocks()} for plugin-owned registrations. */
     CustomBlockRegistry customBlocks();
 
+    /** Read-only view of vanilla data-pack tags for blocks, items, entities, fluids, and damage types. */
+    default TagRegistry tags() {
+        return TagRegistry.empty();
+    }
+
+    default LootTableService lootTables() {
+        return LootTableService.empty();
+    }
+
+    default AdvancementRegistry advancements() {
+        return AdvancementRegistry.empty();
+    }
+
+    default EnchantmentRegistry enchantments() {
+        return EnchantmentRegistry.empty();
+    }
+
+    default StructureService structures() {
+        return StructureService.empty();
+    }
+
+    default MapService maps() {
+        return MapService.empty();
+    }
+
+    default PluginMessaging pluginMessaging() {
+        return PluginMessaging.empty();
+    }
+
     /** Lightweight GUI routing service. */
     GuiService guis();
 
@@ -89,6 +125,22 @@ public interface Server extends ForwardingAudience {
 
     /** Latest published server tick performance snapshot. */
     ServerPerformance performance();
+
+    default int currentTick() {
+        return (int) Math.min(Integer.MAX_VALUE, performance().tickCount());
+    }
+
+    default String motd() {
+        return "";
+    }
+
+    default void setMotd(String motd) {
+        throw new UnsupportedOperationException("MOTD changes are not supported");
+    }
+
+    default CompletableFuture<Boolean> reloadData() {
+        return CompletableFuture.completedFuture(false);
+    }
 
     /** Snapshot of all currently online players. The returned collection is a copy. */
     Collection<? extends Player> players();

@@ -1,6 +1,7 @@
 package io.fand.server.command;
 
 import io.fand.api.command.CommandCompleter;
+import io.fand.api.command.CommandArgument;
 import io.fand.api.command.CommandDescriptor;
 import io.fand.api.command.CommandExecutor;
 import io.fand.api.command.CommandRegistration;
@@ -388,6 +389,10 @@ public final class CommandManager implements CommandRegistry {
         for (var argument : descriptor.arguments()) {
             arguments.add(normalizePart(argument, "argument"));
         }
+        var typedArguments = new ArrayList<CommandArgument>(descriptor.typedArguments().size());
+        for (var argument : descriptor.typedArguments()) {
+            typedArguments.add(normalizeArgument(argument));
+        }
         var aliases = new ArrayList<String>(descriptor.aliases().size());
         for (var alias : descriptor.aliases()) {
             var normalized = normalizePart(alias, "alias");
@@ -399,7 +404,28 @@ public final class CommandManager implements CommandRegistry {
             }
         }
         var permission = descriptor.permission() == null ? null : descriptor.permission().trim();
-        return new CommandDescriptor(namespace, label, subcommands, arguments, aliases, permission == null || permission.isEmpty() ? null : permission);
+        return new CommandDescriptor(
+                namespace,
+                label,
+                subcommands,
+                arguments,
+                typedArguments,
+                aliases,
+                permission == null || permission.isEmpty() ? null : permission);
+    }
+
+    private static CommandArgument normalizeArgument(CommandArgument argument) {
+        Objects.requireNonNull(argument, "argument");
+        var suggestions = new ArrayList<String>(argument.suggestions().size());
+        for (var suggestion : argument.suggestions()) {
+            suggestions.add(normalizeInput(suggestion));
+        }
+        return new CommandArgument(
+                normalizePart(argument.name(), "argument"),
+                argument.type(),
+                argument.optional(),
+                suggestions,
+                argument.registry());
     }
 
     private static List<String> normalizeTokens(List<String> tokens) {

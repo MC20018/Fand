@@ -18,13 +18,28 @@ public record CommandDescriptor(
         String label,
         List<String> subcommands,
         List<String> arguments,
+        List<CommandArgument> typedArguments,
         List<String> aliases,
         @Nullable String permission
 ) {
     public CommandDescriptor {
         subcommands = List.copyOf(subcommands);
         arguments = List.copyOf(arguments);
+        typedArguments = List.copyOf(typedArguments);
         aliases = List.copyOf(aliases);
+    }
+
+    public CommandDescriptor(
+            String namespace,
+            String label,
+            List<String> subcommands,
+            List<String> arguments,
+            List<String> aliases,
+            @Nullable String permission
+    ) {
+        this(namespace, label, subcommands, arguments, arguments.stream()
+                .map(CommandArgument::string)
+                .toList(), aliases, permission);
     }
 
     public CommandDescriptor(String namespace, String label, List<String> subcommands, List<String> aliases, @Nullable String permission) {
