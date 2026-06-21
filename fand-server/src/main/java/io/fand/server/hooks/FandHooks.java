@@ -138,6 +138,7 @@ public final class FandHooks {
     private static volatile boolean chunkTaskDispatcherBatchLoop = true;
     private static volatile boolean chunkStorageRegionScanFastPath = true;
     private static volatile boolean worldgenSeaLevelCache = true;
+    private static volatile boolean fandRedstoneEngine = true;
     private static volatile boolean itemEntityMergeFastPath = true;
     private static volatile boolean areaEffectCloudFastPath = true;
     private static volatile boolean aiNearestTargetFastPath = true;
@@ -200,6 +201,7 @@ public final class FandHooks {
         chunkTaskDispatcherBatchLoop = performance.chunkTaskDispatcherBatchLoop;
         chunkStorageRegionScanFastPath = performance.chunkStorageRegionScanFastPath;
         worldgenSeaLevelCache = performance.worldgenSeaLevelCache;
+        fandRedstoneEngine = performance.fandRedstoneEngine;
         itemEntityMergeFastPath = performance.itemEntityMergeFastPath;
         areaEffectCloudFastPath = performance.areaEffectCloudFastPath;
         aiNearestTargetFastPath = performance.aiNearestTargetFastPath;
@@ -346,6 +348,10 @@ public final class FandHooks {
 
     public static boolean worldgenSeaLevelCacheEnabled() {
         return worldgenSeaLevelCache;
+    }
+
+    public static boolean fandRedstoneEngineEnabled() {
+        return fandRedstoneEngine;
     }
 
     public static boolean itemEntityMergeFastPathEnabled() {

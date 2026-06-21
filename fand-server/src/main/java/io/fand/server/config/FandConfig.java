@@ -376,6 +376,15 @@ public final class FandConfig {
         public volatile boolean worldgenSeaLevelCache = true;
 
         @ConfigComment({
+                "Use Fand's redstone wire engine for dust power propagation.",
+                "The NMS wire hook enters Fand's implementation directly; the",
+                "engine preserves vanilla power, event, block update, and",
+                "neighbor notification order instead of delegating to Mojang's",
+                "RedstoneWireEvaluator classes."
+        })
+        public volatile boolean fandRedstoneEngine = true;
+
+        @ConfigComment({
                 "Use a direct entity-section scan for item entity merging instead",
                 "of allocating a nearby-item list before attempting merges.",
                 "Merge rules and events are unchanged."

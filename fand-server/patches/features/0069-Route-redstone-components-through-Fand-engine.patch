@@ -1,0 +1,675 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC20018 <winme2001@outlook.com>
+Date: Sun, 21 Jun 2026 16:56:04 +0800
+Subject: [PATCH] Route redstone components through Fand engine
+
+
+diff --git a/net/minecraft/world/level/block/DetectorRailBlock.java b/net/minecraft/world/level/block/DetectorRailBlock.java
+index 9fa2ccafb5cbf652f70b475db1ddf3b9b5eefcfb..a0efdc7d58249651806c189e4772d88133632928 100644
+--- a/net/minecraft/world/level/block/DetectorRailBlock.java
++++ b/net/minecraft/world/level/block/DetectorRailBlock.java
+@@ -1,21 +1,16 @@
+ package net.minecraft.world.level.block;
+ 
+ import com.mojang.serialization.MapCodec;
+-import java.util.List;
+-import java.util.function.Predicate;
++import io.fand.server.redstone.FandDetectorRailEngine;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.util.RandomSource;
+-import net.minecraft.world.Container;
+ import net.minecraft.world.entity.Entity;
+-import net.minecraft.world.entity.EntitySelector;
+ import net.minecraft.world.entity.InsideBlockEffectApplier;
+-import net.minecraft.world.entity.vehicle.minecart.AbstractMinecart;
+-import net.minecraft.world.entity.vehicle.minecart.MinecartCommandBlock;
+-import net.minecraft.world.inventory.AbstractContainerMenu;
+ import net.minecraft.world.level.BlockGetter;
+ import net.minecraft.world.level.Level;
++import net.minecraft.world.level.LevelReader;
+ import net.minecraft.world.level.block.state.BlockBehaviour;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.block.state.StateDefinition;
+@@ -25,13 +20,12 @@ import net.minecraft.world.level.block.state.properties.EnumProperty;
+ import net.minecraft.world.level.block.state.properties.Property;
+ import net.minecraft.world.level.block.state.properties.RailShape;
+ import net.minecraft.world.level.redstone.Redstone;
+-import net.minecraft.world.phys.AABB;
+ 
+ public class DetectorRailBlock extends BaseRailBlock {
+     public static final MapCodec<DetectorRailBlock> CODEC = simpleCodec(DetectorRailBlock::new);
+     public static final EnumProperty<RailShape> SHAPE = BlockStateProperties.RAIL_SHAPE_STRAIGHT;
+     public static final BooleanProperty POWERED = BlockStateProperties.POWERED;
+-    private static final int PRESSED_CHECK_PERIOD = 20;
++    private final FandDetectorRailEngine fandEngine = new FandDetectorRailEngine();
+ 
+     @Override
+     public MapCodec<DetectorRailBlock> codec() {
+@@ -64,7 +58,7 @@ public class DetectorRailBlock extends BaseRailBlock {
+     ) {
+         if (!level.isClientSide()) {
+             if (!state.getValue(POWERED)) {
+-                this.checkPressed(level, pos, state);
++                this.fandEngine.checkPressed(this, level, pos, state);
+             }
+         }
+     }
+@@ -72,7 +66,7 @@ public class DetectorRailBlock extends BaseRailBlock {
+     @Override
+     protected void tick(final BlockState state, final ServerLevel level, final BlockPos pos, final RandomSource random) {
+         if (state.getValue(POWERED)) {
+-            this.checkPressed(level, pos, state);
++            this.fandEngine.checkPressed(this, level, pos, state);
+         }
+     }
+ 
+@@ -85,55 +79,15 @@ public class DetectorRailBlock extends BaseRailBlock {
+         }
+     }
+ 
+-    private void checkPressed(final Level level, final BlockPos pos, final BlockState state) {
+-        if (this.canSurvive(state, level, pos)) {
+-            boolean wasPressed = state.getValue(POWERED);
+-            boolean shouldBePressed = false;
+-            List<AbstractMinecart> entities = this.getInteractingMinecartOfType(level, pos, AbstractMinecart.class, e -> true);
+-            if (!entities.isEmpty()) {
+-                shouldBePressed = true;
+-            }
+-
+-            if (shouldBePressed && !wasPressed) {
+-                BlockState newState = state.setValue(POWERED, true);
+-                level.setBlock(pos, newState, Block.UPDATE_ALL);
+-                this.updatePowerToConnected(level, pos, newState, true);
+-                level.updateNeighborsAt(pos, this);
+-                level.updateNeighborsAt(pos.below(), this);
+-                level.setBlocksDirty(pos, state, newState);
+-            }
+-
+-            if (!shouldBePressed && wasPressed) {
+-                BlockState newState = state.setValue(POWERED, false);
+-                level.setBlock(pos, newState, Block.UPDATE_ALL);
+-                this.updatePowerToConnected(level, pos, newState, false);
+-                level.updateNeighborsAt(pos, this);
+-                level.updateNeighborsAt(pos.below(), this);
+-                level.setBlocksDirty(pos, state, newState);
+-            }
+-
+-            if (shouldBePressed) {
+-                level.scheduleTick(pos, this, 20);
+-            }
+-
+-            level.updateNeighbourForOutputSignal(pos, this);
+-        }
+-    }
+-
+-    protected void updatePowerToConnected(final Level level, final BlockPos pos, final BlockState state, final boolean powered) {
+-        RailState rail = new RailState(level, pos, state);
+-
+-        for (BlockPos connectionPos : rail.getConnections()) {
+-            BlockState connectionState = level.getBlockState(connectionPos);
+-            level.neighborChanged(connectionState, connectionPos, connectionState.getBlock(), null, false);
+-        }
++    public boolean fand$canSurvive(final BlockState state, final LevelReader level, final BlockPos pos) {
++        return this.canSurvive(state, level, pos);
+     }
+ 
+     @Override
+     protected void onPlace(final BlockState state, final Level level, final BlockPos pos, final BlockState oldState, final boolean movedByPiston) {
+         if (!oldState.is(state.getBlock())) {
+             BlockState updatedState = this.updateState(state, level, pos, movedByPiston);
+-            this.checkPressed(level, pos, updatedState);
++            this.fandEngine.checkPressed(this, level, pos, updatedState);
+         }
+     }
+ 
+@@ -149,30 +103,7 @@ public class DetectorRailBlock extends BaseRailBlock {
+ 
+     @Override
+     protected int getAnalogOutputSignal(final BlockState state, final Level level, final BlockPos pos, final Direction direction) {
+-        if (state.getValue(POWERED)) {
+-            List<MinecartCommandBlock> commandBlocks = this.getInteractingMinecartOfType(level, pos, MinecartCommandBlock.class, e -> true);
+-            if (!commandBlocks.isEmpty()) {
+-                return commandBlocks.get(0).getCommandBlock().getSuccessCount();
+-            }
+-
+-            List<AbstractMinecart> entities = this.getInteractingMinecartOfType(level, pos, AbstractMinecart.class, EntitySelector.CONTAINER_ENTITY_SELECTOR);
+-            if (!entities.isEmpty()) {
+-                return AbstractContainerMenu.getRedstoneSignalFromContainer((Container)entities.get(0));
+-            }
+-        }
+-
+-        return 0;
+-    }
+-
+-    private <T extends AbstractMinecart> List<T> getInteractingMinecartOfType(
+-        final Level level, final BlockPos pos, final Class<T> type, final Predicate<Entity> containerEntitySelector
+-    ) {
+-        return level.getEntitiesOfClass(type, this.getSearchBB(pos), containerEntitySelector);
+-    }
+-
+-    private AABB getSearchBB(final BlockPos pos) {
+-        double b = 0.2;
+-        return new AABB(pos.getX() + 0.2, pos.getY(), pos.getZ() + 0.2, pos.getX() + 1 - 0.2, pos.getY() + 1 - 0.2, pos.getZ() + 1 - 0.2);
++        return this.fandEngine.getAnalogOutputSignal(state, level, pos);
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/block/ObserverBlock.java b/net/minecraft/world/level/block/ObserverBlock.java
+index 200828ae0e839528f3c79ac5b432fd0888af3678..d7a6b2a1d1b914f5b735717b7e2682d3e23cee4a 100644
+--- a/net/minecraft/world/level/block/ObserverBlock.java
++++ b/net/minecraft/world/level/block/ObserverBlock.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.world.level.block;
+ 
+ import com.mojang.serialization.MapCodec;
++import io.fand.server.redstone.FandObserverEngine;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.server.level.ServerLevel;
+@@ -15,13 +16,12 @@ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.block.state.StateDefinition;
+ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+ import net.minecraft.world.level.block.state.properties.BooleanProperty;
+-import net.minecraft.world.level.redstone.ExperimentalRedstoneUtils;
+-import net.minecraft.world.level.redstone.Orientation;
+ import net.minecraft.world.level.redstone.Redstone;
+ 
+ public class ObserverBlock extends DirectionalBlock {
+     public static final MapCodec<ObserverBlock> CODEC = simpleCodec(ObserverBlock::new);
+     public static final BooleanProperty POWERED = BlockStateProperties.POWERED;
++    private final FandObserverEngine fandEngine = new FandObserverEngine();
+ 
+     @Override
+     public MapCodec<ObserverBlock> codec() {
+@@ -50,14 +50,7 @@ public class ObserverBlock extends DirectionalBlock {
+ 
+     @Override
+     protected void tick(final BlockState state, final ServerLevel level, final BlockPos pos, final RandomSource random) {
+-        if (state.getValue(POWERED)) {
+-            level.setBlock(pos, state.setValue(POWERED, false), Block.UPDATE_CLIENTS);
+-        } else {
+-            level.setBlock(pos, state.setValue(POWERED, true), Block.UPDATE_CLIENTS);
+-            level.scheduleTick(pos, this, 2);
+-        }
+-
+-        this.updateNeighborsInFront(level, pos, state);
++        this.fandEngine.onTick(this, state, level, pos, random);
+     }
+ 
+     @Override
+@@ -71,27 +64,11 @@ public class ObserverBlock extends DirectionalBlock {
+         final BlockState neighbourState,
+         final RandomSource random
+     ) {
+-        if (state.getValue(FACING) == directionToNeighbour && !state.getValue(POWERED)) {
+-            this.startSignal(level, ticks, pos);
+-        }
++        this.fandEngine.onShapeUpdate(this, state, level, ticks, pos, directionToNeighbour);
+ 
+         return super.updateShape(state, level, ticks, pos, directionToNeighbour, neighbourPos, neighbourState, random);
+     }
+ 
+-    private void startSignal(final LevelReader level, final ScheduledTickAccess ticks, final BlockPos pos) {
+-        if (!level.isClientSide() && !ticks.getBlockTicks().hasScheduledTick(pos, this)) {
+-            ticks.scheduleTick(pos, this, 2);
+-        }
+-    }
+-
+-    protected void updateNeighborsInFront(final Level level, final BlockPos pos, final BlockState state) {
+-        Direction direction = state.getValue(FACING);
+-        BlockPos oppositePos = pos.relative(direction.getOpposite());
+-        Orientation orientation = ExperimentalRedstoneUtils.initialOrientation(level, direction.getOpposite(), null);
+-        level.neighborChanged(oppositePos, this, orientation);
+-        level.updateNeighborsAtExceptFromFacing(oppositePos, this, direction, orientation);
+-    }
+-
+     @Override
+     protected boolean isSignalSource(final BlockState state) {
+         return true;
+@@ -114,20 +91,12 @@ public class ObserverBlock extends DirectionalBlock {
+ 
+     @Override
+     protected void onPlace(final BlockState state, final Level level, final BlockPos pos, final BlockState oldState, final boolean movedByPiston) {
+-        if (!state.is(oldState.getBlock())) {
+-            if (!level.isClientSide() && state.getValue(POWERED) && !level.getBlockTicks().hasScheduledTick(pos, this)) {
+-                BlockState newState = state.setValue(POWERED, false);
+-                level.setBlock(pos, newState, Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+-                this.updateNeighborsInFront(level, pos, newState);
+-            }
+-        }
++        this.fandEngine.onPlace(this, state, level, pos, oldState);
+     }
+ 
+     @Override
+     protected void affectNeighborsAfterRemoval(final BlockState state, final ServerLevel level, final BlockPos pos, final boolean movedByPiston) {
+-        if (state.getValue(POWERED) && level.getBlockTicks().hasScheduledTick(pos, this)) {
+-            this.updateNeighborsInFront(level, pos, state.setValue(POWERED, false));
+-        }
++        this.fandEngine.afterRemoval(this, state, level, pos);
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/block/PoweredRailBlock.java b/net/minecraft/world/level/block/PoweredRailBlock.java
+index 9e5972f941ab5568e8ef2a15cdcba3a562517717..c4b6b73dc5f8b1d0d2e3984212eb45e4a892fc01 100644
+--- a/net/minecraft/world/level/block/PoweredRailBlock.java
++++ b/net/minecraft/world/level/block/PoweredRailBlock.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.world.level.block;
+ 
+ import com.mojang.serialization.MapCodec;
++import io.fand.server.redstone.FandPoweredRailEngine;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.state.BlockBehaviour;
+@@ -16,6 +17,7 @@ public class PoweredRailBlock extends BaseRailBlock {
+     public static final MapCodec<PoweredRailBlock> CODEC = simpleCodec(PoweredRailBlock::new);
+     public static final EnumProperty<RailShape> SHAPE = BlockStateProperties.RAIL_SHAPE_STRAIGHT;
+     public static final BooleanProperty POWERED = BlockStateProperties.POWERED;
++    private final FandPoweredRailEngine fandEngine = new FandPoweredRailEngine();
+ 
+     @Override
+     public MapCodec<PoweredRailBlock> codec() {
+@@ -27,106 +29,9 @@ public class PoweredRailBlock extends BaseRailBlock {
+         this.registerDefaultState(this.stateDefinition.any().setValue(SHAPE, RailShape.NORTH_SOUTH).setValue(POWERED, false).setValue(WATERLOGGED, false));
+     }
+ 
+-    protected boolean findPoweredRailSignal(final Level level, final BlockPos pos, final BlockState state, final boolean forward, final int searchDepth) {
+-        if (searchDepth >= 8) {
+-            return false;
+-        }
+-
+-        int x = pos.getX();
+-        int y = pos.getY();
+-        int z = pos.getZ();
+-        boolean checkBelow = true;
+-        RailShape shape = state.getValue(SHAPE);
+-        switch (shape) {
+-            case NORTH_SOUTH:
+-                if (forward) {
+-                    z++;
+-                } else {
+-                    z--;
+-                }
+-                break;
+-            case EAST_WEST:
+-                if (forward) {
+-                    x--;
+-                } else {
+-                    x++;
+-                }
+-                break;
+-            case ASCENDING_EAST:
+-                if (forward) {
+-                    x--;
+-                } else {
+-                    x++;
+-                    y++;
+-                    checkBelow = false;
+-                }
+-
+-                shape = RailShape.EAST_WEST;
+-                break;
+-            case ASCENDING_WEST:
+-                if (forward) {
+-                    x--;
+-                    y++;
+-                    checkBelow = false;
+-                } else {
+-                    x++;
+-                }
+-
+-                shape = RailShape.EAST_WEST;
+-                break;
+-            case ASCENDING_NORTH:
+-                if (forward) {
+-                    z++;
+-                } else {
+-                    z--;
+-                    y++;
+-                    checkBelow = false;
+-                }
+-
+-                shape = RailShape.NORTH_SOUTH;
+-                break;
+-            case ASCENDING_SOUTH:
+-                if (forward) {
+-                    z++;
+-                    y++;
+-                    checkBelow = false;
+-                } else {
+-                    z--;
+-                }
+-
+-                shape = RailShape.NORTH_SOUTH;
+-        }
+-
+-        return this.isSameRailWithPower(level, new BlockPos(x, y, z), forward, searchDepth, shape)
+-            || checkBelow && this.isSameRailWithPower(level, new BlockPos(x, y - 1, z), forward, searchDepth, shape);
+-    }
+-
+-    protected boolean isSameRailWithPower(final Level level, final BlockPos pos, final boolean forward, final int searchDepth, final RailShape dir) {
+-        BlockState state = level.getBlockState(pos);
+-        if (!state.is(this)) {
+-            return false;
+-        }
+-
+-        RailShape myShape = state.getValue(SHAPE);
+-        return (dir != RailShape.EAST_WEST || myShape != RailShape.NORTH_SOUTH && myShape != RailShape.ASCENDING_NORTH && myShape != RailShape.ASCENDING_SOUTH)
+-            && (dir != RailShape.NORTH_SOUTH || myShape != RailShape.EAST_WEST && myShape != RailShape.ASCENDING_EAST && myShape != RailShape.ASCENDING_WEST)
+-            && state.getValue(POWERED)
+-            && (level.hasNeighborSignal(pos) || this.findPoweredRailSignal(level, pos, state, forward, searchDepth + 1));
+-    }
+-
+     @Override
+     protected void updateState(final BlockState state, final Level level, final BlockPos pos, final Block block) {
+-        boolean isPowered = state.getValue(POWERED);
+-        boolean shouldPower = level.hasNeighborSignal(pos)
+-            || this.findPoweredRailSignal(level, pos, state, true, 0)
+-            || this.findPoweredRailSignal(level, pos, state, false, 0);
+-        if (shouldPower != isPowered) {
+-            level.setBlock(pos, state.setValue(POWERED, shouldPower), Block.UPDATE_ALL);
+-            level.updateNeighborsAt(pos.below(), this);
+-            if (state.getValue(SHAPE).isSlope()) {
+-                level.updateNeighborsAt(pos.above(), this);
+-            }
+-        }
++        this.fandEngine.updateState(this, state, level, pos);
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecraft/world/level/block/RedStoneWireBlock.java
+index 0a4beae404f803c0990bf8f85c7da4ce2ab69d4b..2d5f989fe3a9c19cbfc92d983ed973a83389fe62 100644
+--- a/net/minecraft/world/level/block/RedStoneWireBlock.java
++++ b/net/minecraft/world/level/block/RedStoneWireBlock.java
+@@ -3,6 +3,7 @@ package net.minecraft.world.level.block;
+ import com.google.common.collect.ImmutableMap;
+ import com.google.common.collect.Maps;
+ import com.mojang.serialization.MapCodec;
++import io.fand.server.redstone.FandRedstoneWireEngine;
+ import java.util.Map;
+ import java.util.Map.Entry;
+ import java.util.function.Function;
+@@ -16,7 +17,6 @@ import net.minecraft.util.RandomSource;
+ import net.minecraft.util.Util;
+ import net.minecraft.world.InteractionResult;
+ import net.minecraft.world.entity.player.Player;
+-import net.minecraft.world.flag.FeatureFlags;
+ import net.minecraft.world.item.context.BlockPlaceContext;
+ import net.minecraft.world.level.BlockGetter;
+ import net.minecraft.world.level.Level;
+@@ -30,12 +30,9 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+ import net.minecraft.world.level.block.state.properties.EnumProperty;
+ import net.minecraft.world.level.block.state.properties.IntegerProperty;
+ import net.minecraft.world.level.block.state.properties.RedstoneSide;
+-import net.minecraft.world.level.redstone.DefaultRedstoneWireEvaluator;
+ import net.minecraft.world.level.redstone.ExperimentalRedstoneUtils;
+-import net.minecraft.world.level.redstone.ExperimentalRedstoneWireEvaluator;
+ import net.minecraft.world.level.redstone.Orientation;
+ import net.minecraft.world.level.redstone.Redstone;
+-import net.minecraft.world.level.redstone.RedstoneWireEvaluator;
+ import net.minecraft.world.phys.BlockHitResult;
+ import net.minecraft.world.phys.shapes.CollisionContext;
+ import net.minecraft.world.phys.shapes.Shapes;
+@@ -64,7 +61,7 @@ public class RedStoneWireBlock extends Block {
+     private static final float PARTICLE_DENSITY = 0.2F;
+     private final Function<BlockState, VoxelShape> shapes;
+     private final BlockState crossState;
+-    private final RedstoneWireEvaluator evaluator = new DefaultRedstoneWireEvaluator(this);
++    private final FandRedstoneWireEngine fandEngine = new FandRedstoneWireEngine(this);
+     private boolean shouldSignal = true;
+ 
+     @Override
+@@ -280,11 +277,7 @@ public class RedStoneWireBlock extends Block {
+         final @Nullable Orientation orientation,
+         final boolean shapeUpdateWiresAroundInitialPosition
+     ) {
+-        if (useExperimentalEvaluator(level)) {
+-            new ExperimentalRedstoneWireEvaluator(this).updatePowerStrength(level, pos, state, orientation, shapeUpdateWiresAroundInitialPosition);
+-        } else {
+-            this.evaluator.updatePowerStrength(level, pos, state, orientation, shapeUpdateWiresAroundInitialPosition);
+-        }
++        this.fandEngine.updatePowerStrength(level, pos, state, orientation, shapeUpdateWiresAroundInitialPosition);
+     }
+ 
+     public int getBlockSignal(final Level level, final BlockPos pos) {
+@@ -349,7 +342,7 @@ public class RedStoneWireBlock extends Block {
+         final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
+     ) {
+         if (!level.isClientSide()) {
+-            if (block != this || !useExperimentalEvaluator(level)) {
++            if (!this.fandEngine.skipsSelfNeighborUpdate(level, block)) {
+                 if (state.canSurvive(level, pos)) {
+                     this.updatePowerStrength(level, pos, state, orientation, false);
+                 } else {
+@@ -360,10 +353,6 @@ public class RedStoneWireBlock extends Block {
+         }
+     }
+ 
+-    private static boolean useExperimentalEvaluator(final Level level) {
+-        return level.enabledFeatures().contains(FeatureFlags.REDSTONE_EXPERIMENTS);
+-    }
+-
+     @Override
+     protected int getDirectSignal(final BlockState state, final BlockGetter level, final BlockPos pos, final Direction direction) {
+         return !this.shouldSignal ? Redstone.SIGNAL_MIN : state.getSignal(level, pos, direction);
+diff --git a/net/minecraft/world/level/block/RedstoneLampBlock.java b/net/minecraft/world/level/block/RedstoneLampBlock.java
+index 718e6700b90f70c8dd74aeb7f3841ce5d344b6dd..5e57d57e99e748c67c01852ab9c0720f08f6632a 100644
+--- a/net/minecraft/world/level/block/RedstoneLampBlock.java
++++ b/net/minecraft/world/level/block/RedstoneLampBlock.java
+@@ -1,6 +1,7 @@
+ package net.minecraft.world.level.block;
+ 
+ import com.mojang.serialization.MapCodec;
++import io.fand.server.redstone.FandRedstoneLampEngine;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.util.RandomSource;
+@@ -16,6 +17,7 @@ import org.jspecify.annotations.Nullable;
+ public class RedstoneLampBlock extends Block {
+     public static final MapCodec<RedstoneLampBlock> CODEC = simpleCodec(RedstoneLampBlock::new);
+     public static final BooleanProperty LIT = RedstoneTorchBlock.LIT;
++    private final FandRedstoneLampEngine fandEngine = new FandRedstoneLampEngine();
+ 
+     @Override
+     public MapCodec<RedstoneLampBlock> codec() {
+@@ -36,23 +38,12 @@ public class RedstoneLampBlock extends Block {
+     protected void neighborChanged(
+         final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
+     ) {
+-        if (!level.isClientSide()) {
+-            boolean isLit = state.getValue(LIT);
+-            if (isLit != level.hasNeighborSignal(pos)) {
+-                if (isLit) {
+-                    level.scheduleTick(pos, this, 4);
+-                } else {
+-                    level.setBlock(pos, state.cycle(LIT), Block.UPDATE_CLIENTS);
+-                }
+-            }
+-        }
++        this.fandEngine.onNeighborChanged(this, state, level, pos);
+     }
+ 
+     @Override
+     protected void tick(final BlockState state, final ServerLevel level, final BlockPos pos, final RandomSource random) {
+-        if (state.getValue(LIT) && !level.hasNeighborSignal(pos)) {
+-            level.setBlock(pos, state.cycle(LIT), Block.UPDATE_CLIENTS);
+-        }
++        this.fandEngine.onTick(state, level, pos, random);
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/block/piston/PistonBaseBlock.java b/net/minecraft/world/level/block/piston/PistonBaseBlock.java
+index 346fbc0bca5fe22be9d6634af1d97ef3ae017a89..fec887dacef778cb043ad421418d65eae5f52e0d 100644
+--- a/net/minecraft/world/level/block/piston/PistonBaseBlock.java
++++ b/net/minecraft/world/level/block/piston/PistonBaseBlock.java
+@@ -5,22 +5,19 @@ import com.google.common.collect.Maps;
+ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.MapCodec;
+ import com.mojang.serialization.codecs.RecordCodecBuilder;
++import io.fand.server.redstone.FandPistonEngine;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Map.Entry;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.server.level.ServerLevel;
+-import net.minecraft.sounds.SoundEvents;
+-import net.minecraft.sounds.SoundSource;
+ import net.minecraft.tags.BlockTags;
+-import net.minecraft.util.RandomSource;
+ import net.minecraft.world.entity.LivingEntity;
+ import net.minecraft.world.item.ItemStack;
+ import net.minecraft.world.item.context.BlockPlaceContext;
+ import net.minecraft.world.level.BlockGetter;
+ import net.minecraft.world.level.Level;
+-import net.minecraft.world.level.SignalGetter;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.block.Blocks;
+ import net.minecraft.world.level.block.DirectionalBlock;
+@@ -55,6 +52,7 @@ public class PistonBaseBlock extends DirectionalBlock {
+     public static final int PLATFORM_THICKNESS = 4;
+     private static final Map<Direction, VoxelShape> SHAPES = Shapes.rotateAll(Block.boxZ(16.0, 4.0, 16.0));
+     private final boolean isSticky;
++    private final FandPistonEngine fandEngine = new FandPistonEngine();
+ 
+     @Override
+     public MapCodec<PistonBaseBlock> codec() {
+@@ -103,125 +101,24 @@ public class PistonBaseBlock extends DirectionalBlock {
+     }
+ 
+     private void checkIfExtend(final Level level, final BlockPos pos, final BlockState state) {
+-        Direction direction = state.getValue(FACING);
+-        boolean extend = this.getNeighborSignal(level, pos, direction);
+-        if (extend && !state.getValue(EXTENDED)) {
+-            if (new PistonStructureResolver(level, pos, direction, true).resolve()) {
+-                level.blockEvent(pos, this, TRIGGER_EXTEND, direction.get3DDataValue());
+-            }
+-        } else if (!extend && state.getValue(EXTENDED)) {
+-            BlockPos pushedPos = pos.relative(direction, 2);
+-            BlockState pushedState = level.getBlockState(pushedPos);
+-            int event = TRIGGER_CONTRACT;
+-            if (pushedState.is(Blocks.MOVING_PISTON)
+-                && pushedState.getValue(FACING) == direction
+-                && level.getBlockEntity(pushedPos) instanceof PistonMovingBlockEntity pistonEntity
+-                && pistonEntity.isExtending()
+-                && (pistonEntity.getProgress(0.0F) < 0.5F || level.getGameTime() == pistonEntity.getLastTicked() || ((ServerLevel)level).isHandlingTick())) {
+-                event = 2;
+-            }
+-
+-            level.blockEvent(pos, this, event, direction.get3DDataValue());
+-        }
+-    }
+-
+-    private boolean getNeighborSignal(final SignalGetter level, final BlockPos pos, final Direction pushDirection) {
+-        for (Direction direction : Direction.values()) {
+-            if (direction != pushDirection && level.hasSignal(pos.relative(direction), direction)) {
+-                return true;
+-            }
+-        }
+-
+-        if (level.hasSignal(pos, Direction.DOWN)) {
+-            return true;
+-        }
+-
+-        BlockPos above = pos.above();
+-
+-        for (Direction direction : Direction.values()) {
+-            if (direction != Direction.DOWN && level.hasSignal(above.relative(direction), direction)) {
+-                return true;
+-            }
+-        }
+-
+-        return false;
++        this.fandEngine.checkIfExtend(this, level, pos, state);
+     }
+ 
+     @Override
+     protected boolean triggerEvent(final BlockState state, final Level level, final BlockPos pos, final int b0, final int b1) {
+-        Direction direction = state.getValue(FACING);
+-        BlockState extendedState = state.setValue(EXTENDED, true);
+-        if (!level.isClientSide()) {
+-            boolean extend = this.getNeighborSignal(level, pos, direction);
+-            if (extend && (b0 == TRIGGER_CONTRACT || b0 == TRIGGER_DROP)) {
+-                level.setBlock(pos, extendedState, Block.UPDATE_CLIENTS);
+-                return false;
+-            }
+-
+-            if (!extend && b0 == 0) {
+-                return false;
+-            }
+-        }
+-
+-        RandomSource random = level.getRandom();
+-        if (b0 == 0) {
+-            if (!this.moveBlocks(level, pos, direction, true)) {
+-                return false;
+-            }
+-
+-            level.setBlock(pos, extendedState, Block.UPDATE_ALL | Block.UPDATE_MOVE_BY_PISTON);
+-            level.playSound(null, pos, SoundEvents.PISTON_EXTEND, SoundSource.BLOCKS, 0.5F, random.nextFloat() * 0.25F + 0.6F);
+-            level.gameEvent(GameEvent.BLOCK_ACTIVATE, pos, GameEvent.Context.of(extendedState));
+-        } else if (b0 == TRIGGER_CONTRACT || b0 == TRIGGER_DROP) {
+-            if (level.getBlockEntity(pos.relative(direction)) instanceof PistonMovingBlockEntity pistonMovingBlockEntity) {
+-                pistonMovingBlockEntity.finalTick();
+-            }
++        return this.fandEngine.triggerEvent(this, state, level, pos, b0, b1);
++    }
+ 
+-            BlockState movingPistonState = Blocks.MOVING_PISTON
+-                .defaultBlockState()
+-                .setValue(MovingPistonBlock.FACING, direction)
+-                .setValue(MovingPistonBlock.TYPE, this.isSticky ? PistonType.STICKY : PistonType.DEFAULT);
+-            level.setBlock(pos, movingPistonState, Block.UPDATE_NONE | Block.UPDATE_KNOWN_SHAPE);
+-            level.setBlockEntity(
+-                MovingPistonBlock.newMovingBlockEntity(
+-                    pos, movingPistonState, this.defaultBlockState().setValue(FACING, Direction.from3DDataValue(b1 & 7)), direction, false, true
+-                )
+-            );
+-            level.updateNeighborsAt(pos, movingPistonState.getBlock());
+-            movingPistonState.updateNeighbourShapes(level, pos, Block.UPDATE_CLIENTS);
+-            if (this.isSticky) {
+-                BlockPos twoPos = pos.offset(direction.getStepX() * 2, direction.getStepY() * 2, direction.getStepZ() * 2);
+-                BlockState movingState = level.getBlockState(twoPos);
+-                boolean pistonPiece = false;
+-                if (movingState.is(Blocks.MOVING_PISTON)
+-                    && level.getBlockEntity(twoPos) instanceof PistonMovingBlockEntity entity
+-                    && entity.getDirection() == direction
+-                    && entity.isExtending()) {
+-                    entity.finalTick();
+-                    pistonPiece = true;
+-                }
+-
+-                if (!pistonPiece) {
+-                    if (b0 != TRIGGER_CONTRACT
+-                        || movingState.isAir()
+-                        || !isPushable(movingState, level, twoPos, direction.getOpposite(), false, direction)
+-                        || movingState.getPistonPushReaction() != PushReaction.NORMAL
+-                            && !movingState.is(Blocks.PISTON)
+-                            && !movingState.is(Blocks.STICKY_PISTON)) {
+-                        level.removeBlock(pos.relative(direction), false);
+-                    } else {
+-                        this.moveBlocks(level, pos, direction, false);
+-                    }
+-                }
+-            } else {
+-                level.removeBlock(pos.relative(direction), false);
+-            }
++    public boolean fand$isSticky() {
++        return this.isSticky;
++    }
+ 
+-            level.playSound(null, pos, SoundEvents.PISTON_CONTRACT, SoundSource.BLOCKS, 0.5F, random.nextFloat() * 0.15F + 0.6F);
+-            level.gameEvent(GameEvent.BLOCK_DEACTIVATE, pos, GameEvent.Context.of(movingPistonState));
+-        }
++    public BlockState fand$defaultState() {
++        return this.defaultBlockState();
++    }
+ 
+-        return true;
++    public boolean fand$moveBlocks(final Level level, final BlockPos pistonPos, final Direction direction, final boolean extending) {
++        return this.moveBlocks(level, pistonPos, direction, extending);
+     }
+ 
+     public static boolean isPushable(

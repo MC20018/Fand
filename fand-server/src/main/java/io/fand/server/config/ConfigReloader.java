@@ -92,6 +92,7 @@ public final class ConfigReloader {
             field("performance.chunkStorageRegionScanFastPath",
                     (FandConfig.Performance config) -> config.chunkStorageRegionScanFastPath),
             field("performance.worldgenSeaLevelCache", (FandConfig.Performance config) -> config.worldgenSeaLevelCache),
+            field("performance.fandRedstoneEngine", (FandConfig.Performance config) -> config.fandRedstoneEngine),
             field("performance.itemEntityMergeFastPath",
                     (FandConfig.Performance config) -> config.itemEntityMergeFastPath),
             field("performance.areaEffectCloudFastPath",
