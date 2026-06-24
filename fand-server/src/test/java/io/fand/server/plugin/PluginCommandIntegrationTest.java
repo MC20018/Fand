@@ -50,6 +50,26 @@ final class PluginCommandIntegrationTest {
     }
 
     @Test
+    void pluginCommandRegistryOnlyResolvesOwnCommands() {
+        var commands = new CommandManager(new PermissionManager());
+        var demo = new PluginCommandRegistry(commands, new PluginResourceTracker(), "demo");
+        var other = new PluginCommandRegistry(commands, new PluginResourceTracker(), "other");
+        var sender = new Sender(true);
+
+        demo.register(new CommandDescriptor("ignored", "own", List.of(), List.of(), List.of(), List.of(), null), (current, label, args) -> {}, (current, label, args) -> List.of("owned"));
+        other.register(new CommandDescriptor("ignored", "foreign", List.of(), List.of(), List.of(), List.of(), null), (current, label, args) -> {}, (current, label, args) -> List.of("hidden"));
+
+        assertThat(demo.resolve(sender, List.of("own"))).isPresent();
+        assertThat(demo.resolve(sender, List.of("demo:own"))).isPresent();
+        assertThat(demo.resolve(sender, List.of("foreign"))).isEmpty();
+        assertThat(demo.resolve(sender, List.of("other:foreign"))).isEmpty();
+        assertThat(demo.suggestions(sender, List.of(""))).contains("own", "demo:own").doesNotContain("foreign", "other:foreign");
+        assertThat(demo.suggestions(sender, List.of("foreign", ""))).isEmpty();
+        assertThat(demo.claims(List.of("own"))).isTrue();
+        assertThat(demo.claims(List.of("foreign"))).isFalse();
+    }
+
+    @Test
     void pluginAnnotatedCommandExecutesCompletesAndUnregistersOnDisable() throws Exception {
         var pluginsDir = tempDir.resolve("plugins");
         Files.createDirectories(pluginsDir);

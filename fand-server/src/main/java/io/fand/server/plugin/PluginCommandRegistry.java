@@ -55,17 +55,27 @@ public final class PluginCommandRegistry implements CommandRegistry {
 
     @Override
     public boolean claims(List<String> tokens) {
-        return delegate.claims(tokens);
+        return !tokens.isEmpty() && lookup(tokens.getFirst()).isPresent();
     }
 
     @Override
     public Optional<ResolvedCommand> resolve(CommandSender sender, List<String> tokens) {
-        return delegate.resolve(sender, tokens);
+        return delegate.resolve(sender, tokens)
+                .filter(resolved -> ownedByThisPlugin(resolved.command()));
     }
 
     @Override
     public List<String> suggestions(CommandSender sender, List<String> tokens) {
-        return delegate.suggestions(sender, tokens);
+        if (tokens.size() > 1 && lookup(tokens.getFirst()).isEmpty()) {
+            return List.of();
+        }
+        var suggestions = delegate.suggestions(sender, tokens);
+        if (tokens.size() > 1) {
+            return suggestions;
+        }
+        return suggestions.stream()
+                .filter(suggestion -> lookup(suggestion).isPresent())
+                .toList();
     }
 
     @Override
