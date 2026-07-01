@@ -16,6 +16,7 @@ import io.fand.api.performance.TickWindowSnapshot;
 import io.fand.api.player.PlayerProfile;
 import io.fand.server.chunk.ChunkSendScheduler;
 import io.fand.server.chunk.ChunkTrackingSnapshot;
+import io.fand.server.chunk.AsyncChunkPacketSender;
 import io.fand.server.FandServer;
 import io.fand.server.Main;
 import io.fand.server.entity.EntityRegistry;
@@ -149,6 +150,9 @@ public final class FandHooks {
     private static volatile boolean reusablePacketEncoding = true;
     private static volatile boolean packetFlushCoalescing = true;
     private static volatile boolean outboundPacketQueueCoalescing = true;
+    private static volatile int chargedProjectilesSoftLimit = 1024;
+    private static volatile int bundleContentsSoftLimit = 256;
+    private static volatile boolean asyncChunkPacketPreparation = false;
     private static volatile int chunkWorldgenParallelism = 0;
     private static volatile boolean chunkDedicatedLightThread = true;
     private static volatile boolean chunkLightTaskQueueFastPath = true;
@@ -223,6 +227,8 @@ public final class FandHooks {
         reusablePacketEncoding = performance.reusablePacketEncoding;
         packetFlushCoalescing = performance.packetFlushCoalescing;
         outboundPacketQueueCoalescing = performance.outboundPacketQueueCoalescing;
+        chargedProjectilesSoftLimit = performance.chargedProjectilesSoftLimit;
+        bundleContentsSoftLimit = performance.bundleContentsSoftLimit;
     }
 
     public static void applyPlayerConfig(io.fand.server.config.FandConfig.Players players) {
@@ -235,6 +241,7 @@ public final class FandHooks {
     }
 
     public static void applyChunkConfig(io.fand.server.config.FandConfig.Chunks chunks) {
+        asyncChunkPacketPreparation = chunks.asyncChunkPacketPreparation;
         chunkWorldgenParallelism = chunks.worldgenParallelism;
         chunkDedicatedLightThread = chunks.dedicatedLightThread;
         chunkLightTaskQueueFastPath = chunks.lightTaskQueueFastPath;
@@ -244,6 +251,10 @@ public final class FandHooks {
         chunkTeleportChunkSendBurstTicks = chunks.teleportChunkSendBurstTicks;
         chunkTeleportChunkSendBurstChunksPerTick = chunks.teleportChunkSendBurstChunksPerTick;
         chunkTeleportChunkSendBurstBatches = chunks.teleportChunkSendBurstBatches;
+        var runtime = activeRuntime();
+        if (runtime != null) {
+            runtime.asyncChunkPackets().reconfigure(chunks.asyncChunkPacketPreparation);
+        }
     }
 
     public static boolean playerSpeedCheckEnabled() {
@@ -429,6 +440,23 @@ public final class FandHooks {
 
     public static boolean outboundPacketQueueCoalescingEnabled() {
         return outboundPacketQueueCoalescing;
+    }
+
+    public static int chargedProjectilesSoftLimit() {
+        return chargedProjectilesSoftLimit;
+    }
+
+    public static int bundleContentsSoftLimit() {
+        return bundleContentsSoftLimit;
+    }
+
+    public static @Nullable AsyncChunkPacketSender asyncChunkPacketSender() {
+        var runtime = activeRuntime();
+        if (runtime == null || !asyncChunkPacketPreparation) {
+            return null;
+        }
+        var sender = runtime.asyncChunkPackets();
+        return sender.enabled() ? sender : null;
     }
 
     public static int chunkWorldgenParallelism() {

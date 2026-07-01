@@ -6,7 +6,11 @@ base="${BASE_VERSION:-}"
 input="${RELEASE_VERSION_INPUT:-}"
 
 if [[ -z "$base" && -f gradle.properties ]]; then
-  base="$(grep '^releaseVersion=' gradle.properties | cut -d= -f2)"
+  base="$(grep '^releaseVersion=' gradle.properties | cut -d= -f2 || true)"
+fi
+
+if [[ -z "$base" && -f build.gradle.kts ]]; then
+  base="$(sed -n 's/.*providers\.gradleProperty("releaseVersion").*orElse("\([^"]*\)").*/\1/p' build.gradle.kts | head -n1)"
 fi
 
 if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
@@ -18,6 +22,7 @@ if [[ -n "$input" ]]; then
 fi
 
 base="${base%%+build.*}"
+base="${base%-SNAPSHOT}"
 
 if [[ -z "$base" ]]; then
   echo "release base version must be provided" >&2

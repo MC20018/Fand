@@ -55,6 +55,7 @@ public final class ConfigReloader {
     private static final List<ReloadField<FandConfig.Chunks, ?>> HOT_CHUNK_FIELDS = List.of(
             field("chunks.workerThreads", (FandConfig.Chunks config) -> config.workerThreads),
             field("chunks.trackingDiffApplyBudget", (FandConfig.Chunks config) -> config.trackingDiffApplyBudget),
+            field("chunks.asyncChunkPacketPreparation", (FandConfig.Chunks config) -> config.asyncChunkPacketPreparation),
             field("chunks.teleportPreload", (FandConfig.Chunks config) -> config.teleportPreload),
             field("chunks.teleportPreloadExtraRadius", (FandConfig.Chunks config) -> config.teleportPreloadExtraRadius),
             field("chunks.teleportPreloadSimulation", (FandConfig.Chunks config) -> config.teleportPreloadSimulation),

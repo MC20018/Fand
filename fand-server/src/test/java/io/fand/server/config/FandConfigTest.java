@@ -32,6 +32,7 @@ final class FandConfigTest {
         assertThat(config.chunks.worldgenThreads).isZero();
         assertThat(config.chunks.workerThreads).isZero();
         assertThat(config.chunks.trackingDiffApplyBudget).isEqualTo(256);
+        assertThat(config.chunks.asyncChunkPacketPreparation).isFalse();
         assertThat(config.chunks.worldgenParallelism).isZero();
         assertThat(config.chunks.dedicatedLightThread).isTrue();
         assertThat(config.chunks.lightTaskQueueFastPath).isTrue();
@@ -124,6 +125,7 @@ final class FandConfigTest {
                 .contains("worldgenThreads: 0")
                 .contains("workerThreads: 0")
                 .contains("trackingDiffApplyBudget: 256")
+                .contains("asyncChunkPacketPreparation: false")
                 .contains("worldgenParallelism: 0")
                 .contains("dedicatedLightThread: true")
                 .contains("lightTaskQueueFastPath: true")
@@ -231,6 +233,7 @@ final class FandConfigTest {
                   worldgenThreads: 4
                   workerThreads: 3
                   trackingDiffApplyBudget: 64
+                  asyncChunkPacketPreparation: true
                   worldgenParallelism: 6
                   dedicatedLightThread: false
                   lightTaskQueueFastPath: false
@@ -357,6 +360,7 @@ final class FandConfigTest {
         assertThat(config.chunks.worldgenThreads).isEqualTo(4);
         assertThat(config.chunks.workerThreads).isEqualTo(3);
         assertThat(config.chunks.trackingDiffApplyBudget).isEqualTo(64);
+        assertThat(config.chunks.asyncChunkPacketPreparation).isTrue();
         assertThat(config.chunks.worldgenParallelism).isEqualTo(6);
         assertThat(config.chunks.dedicatedLightThread).isFalse();
         assertThat(config.chunks.lightTaskQueueFastPath).isFalse();

@@ -330,6 +330,15 @@ public final class FandConfig {
         public int trackingDiffApplyBudget = 256;
 
         @ConfigComment({
+                "Prepare full chunk packets on a small background executor before",
+                "they are sent to players. Packet batch order and vanilla pacing",
+                "stay unchanged; only chunk-section serialization is moved off",
+                "the server tick thread. Disabled by default because it changes",
+                "which thread reads chunk packet data."
+        })
+        public volatile boolean asyncChunkPacketPreparation = false;
+
+        @ConfigComment({
                 "Maximum chunk-generation batches allowed to run at the same",
                 "time. Set to 1 for vanilla's serialized worldgen dispatcher,",
                 "or 0 to derive a conservative value from available processors.",
@@ -703,6 +712,23 @@ public final class FandConfig {
                 "one drain task during dense player/entity fanout."
         })
         public volatile boolean outboundPacketQueueCoalescing = true;
+
+        @ConfigComment({
+                "Maximum charged projectile entries kept on crossbow-like item",
+                "components. Oversized component lists are truncated instead of",
+                "throwing during construction, preventing malformed or extreme",
+                "plugin-created items from crashing the server."
+        })
+        @ConfigRange(min = 1, max = 1_000_000)
+        public volatile int chargedProjectilesSoftLimit = 1024;
+
+        @ConfigComment({
+                "Maximum item entries kept in bundle contents. Oversized component",
+                "lists are truncated instead of throwing during construction,",
+                "while normal bundle weight and insertion rules still apply."
+        })
+        @ConfigRange(min = 1, max = 1_000_000)
+        public volatile int bundleContentsSoftLimit = 256;
 
     }
 

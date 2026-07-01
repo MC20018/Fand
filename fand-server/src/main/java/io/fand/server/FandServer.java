@@ -57,6 +57,7 @@ import io.fand.server.auth.FandLoginAuthenticationService;
 import io.fand.server.auth.FandAuthEnvironment;
 import io.fand.server.bossbar.FandBossBarService;
 import io.fand.server.command.BuiltinCommands;
+import io.fand.server.chunk.AsyncChunkPacketSender;
 import io.fand.server.chunk.ChunkSendScheduler;
 import io.fand.server.chunk.ChunkTrackingMetrics;
 import io.fand.server.chunk.ChunkTaskExecutors;
@@ -140,6 +141,7 @@ public final class FandServer implements Server, AutoCloseable {
     private final TaskScheduler scheduler;
     private final ChunkSendScheduler chunks;
     private final ChunkTaskExecutors chunkTasks;
+    private final AsyncChunkPacketSender asyncChunkPackets;
     private final FandRecipeRegistry recipes;
     private final FandScoreboardService scoreboard;
     private final PacketRegistryImpl packets;
@@ -205,6 +207,7 @@ public final class FandServer implements Server, AutoCloseable {
         this.scheduler = new TaskScheduler(initialConfig.scheduler.asyncThreads, initialConfig.scheduler.regionThreads);
         this.chunks = new ChunkSendScheduler(initialConfig.chunks);
         this.chunkTasks = new ChunkTaskExecutors(initialConfig.chunks);
+        this.asyncChunkPackets = new AsyncChunkPacketSender(initialConfig.chunks.asyncChunkPacketPreparation);
         this.recipes = new FandRecipeRegistry();
         this.scoreboard = new FandScoreboardService(minecraftServer::get);
         this.tabLists = new FandTabListService(minecraftServer::get);
@@ -457,6 +460,10 @@ public final class FandServer implements Server, AutoCloseable {
 
     public ChunkTrackingMetrics chunkTrackingMetrics() {
         return chunks.metrics();
+    }
+
+    public AsyncChunkPacketSender asyncChunkPackets() {
+        return asyncChunkPackets;
     }
 
     public java.util.concurrent.Executor chunkBackgroundExecutor() {
@@ -985,6 +992,7 @@ public final class FandServer implements Server, AutoCloseable {
         placeholders.close();
         packets.close();
         guis.close();
+        asyncChunkPackets.close();
         chunks.close();
         chunkTasks.close();
         scheduler.close();

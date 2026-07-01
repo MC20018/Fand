@@ -1,0 +1,557 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC20018 <winme2001@outlook.com>
+Date: Wed, 1 Jul 2026 21:40:48 +0800
+Subject: [PATCH] Optimize chunk access hot paths
+
+
+diff --git a/net/minecraft/network/FriendlyByteBuf.java b/net/minecraft/network/FriendlyByteBuf.java
+index 85e921a8282a0ccc27e9d2f662ffd32085cb7f51..27177e357f8ff8e4ef54450c1068b5f944828711 100644
+--- a/net/minecraft/network/FriendlyByteBuf.java
++++ b/net/minecraft/network/FriendlyByteBuf.java
+@@ -336,17 +336,17 @@ public class FriendlyByteBuf extends ByteBuf {
+     }
+ 
+     public FriendlyByteBuf writeLongArray(final long[] longs) {
+-        writeLongArray(this, longs);
++        writeLongArrayBulk(this, longs);
+         return this;
+     }
+ 
+     public static void writeLongArray(final ByteBuf output, final long[] longs) {
+         VarInt.write(output, longs.length);
+-        writeFixedSizeLongArray(output, longs);
++        writeFixedSizeLongArrayBulk(output, longs);
+     }
+ 
+     public FriendlyByteBuf writeFixedSizeLongArray(final long[] longs) {
+-        writeFixedSizeLongArray(this, longs);
++        writeFixedSizeLongArrayBulk(this, longs);
+         return this;
+     }
+ 
+@@ -356,6 +356,39 @@ public class FriendlyByteBuf extends ByteBuf {
+         }
+     }
+ 
++    private static void writeLongArrayBulk(final ByteBuf output, final long[] longs) {
++        VarInt.write(output, longs.length);
++        writeFixedSizeLongArrayBulk(output, longs);
++    }
++
++    private static void writeFixedSizeLongArrayBulk(final ByteBuf output, final long[] longs) {
++        if (longs.length == 0) {
++            return;
++        }
++
++        int neededBytes = longs.length * Long.BYTES;
++        if (output.maxWritableBytes() < neededBytes) {
++            writeFixedSizeLongArray(output, longs);
++            return;
++        }
++
++        output.ensureWritable(neededBytes);
++        int writerIndex = output.writerIndex();
++        if (output.hasArray()) {
++            byte[] target = output.array();
++            int offset = output.arrayOffset() + writerIndex;
++            ByteBuffer.wrap(target, offset, neededBytes).order(output.order()).asLongBuffer().put(longs);
++            output.writerIndex(writerIndex + neededBytes);
++        } else if (output.nioBufferCount() > 0) {
++            output.nioBuffer(writerIndex, neededBytes).order(output.order()).asLongBuffer().put(longs);
++            output.writerIndex(writerIndex + neededBytes);
++        } else {
++            ByteBuffer buffer = ByteBuffer.allocate(neededBytes).order(output.order());
++            buffer.asLongBuffer().put(longs);
++            output.writeBytes(buffer);
++        }
++    }
++
+     public long[] readLongArray() {
+         return readLongArray(this);
+     }
+diff --git a/net/minecraft/server/level/WorldGenRegion.java b/net/minecraft/server/level/WorldGenRegion.java
+index 5d9c7803f5aad8f28542677afdba12af1acd938b..0450635dea598ba8489f119b8cda0cd88318914b 100644
+--- a/net/minecraft/server/level/WorldGenRegion.java
++++ b/net/minecraft/server/level/WorldGenRegion.java
+@@ -121,6 +121,23 @@ public class WorldGenRegion implements WorldGenLevel {
+         return this.getChunk(chunkX, chunkZ, ChunkStatus.EMPTY);
+     }
+ 
++    @Override
++    public @Nullable ChunkAccess getChunkIfLoadedImmediately(final int chunkX, final int chunkZ) {
++        int distance = this.centerPos.getChessboardDistance(chunkX, chunkZ);
++        ChunkStatus maxAllowedStatus = distance >= this.directDependencyCount
++            ? null
++            : this.directDependencies.get(distance);
++        if (maxAllowedStatus == null || !ChunkStatus.EMPTY.isOrBefore(maxAllowedStatus)) {
++            return null;
++        }
++
++        if (!this.cache.contains(chunkX, chunkZ)) {
++            return null;
++        }
++
++        return this.cache.get(chunkX, chunkZ).getChunkIfPresentUnchecked(maxAllowedStatus);
++    }
++
+     @Override
+     public @Nullable ChunkAccess getChunk(final int chunkX, final int chunkZ, final ChunkStatus targetStatus, final boolean loadOrGenerate) {
+         int distance = this.centerPos.getChessboardDistance(chunkX, chunkZ);
+@@ -169,6 +186,15 @@ public class WorldGenRegion implements WorldGenLevel {
+         return this.getChunk(chunkX, chunkZ).getBlockState(pos);
+     }
+ 
++    @Override
++    public @Nullable BlockState getBlockStateIfLoaded(final BlockPos pos) {
++        int chunkX = SectionPos.blockToSectionCoord(pos.getX());
++        int chunkZ = SectionPos.blockToSectionCoord(pos.getZ());
++        this.warnIfReadOutsideWriteZone(chunkX, chunkZ);
++        ChunkAccess chunk = this.getChunkIfLoadedImmediately(chunkX, chunkZ);
++        return chunk == null ? null : chunk.getBlockState(pos);
++    }
++
+     @Override
+     public FluidState getFluidState(final BlockPos pos) {
+         int chunkX = SectionPos.blockToSectionCoord(pos.getX());
+@@ -177,6 +203,15 @@ public class WorldGenRegion implements WorldGenLevel {
+         return this.getChunk(chunkX, chunkZ).getFluidState(pos);
+     }
+ 
++    @Override
++    public @Nullable FluidState getFluidIfLoaded(final BlockPos pos) {
++        int chunkX = SectionPos.blockToSectionCoord(pos.getX());
++        int chunkZ = SectionPos.blockToSectionCoord(pos.getZ());
++        this.warnIfReadOutsideWriteZone(chunkX, chunkZ);
++        ChunkAccess chunk = this.getChunkIfLoadedImmediately(chunkX, chunkZ);
++        return chunk == null ? null : chunk.getFluidState(pos);
++    }
++
+     @Override
+     public @Nullable Player getNearestPlayer(final double x, final double y, final double z, final double maxDist, final @Nullable Predicate<Entity> predicate) {
+         return null;
+diff --git a/net/minecraft/world/level/BlockGetter.java b/net/minecraft/world/level/BlockGetter.java
+index 74e80fc1f5705a6d432954efc38e1fc1c1d522b2..648158d5c0597899c2c951ff17df5725afb5766e 100644
+--- a/net/minecraft/world/level/BlockGetter.java
++++ b/net/minecraft/world/level/BlockGetter.java
+@@ -31,8 +31,16 @@ public interface BlockGetter extends LevelHeightAccessor {
+ 
+     BlockState getBlockState(final BlockPos pos);
+ 
++    default @Nullable BlockState getBlockStateIfLoaded(final BlockPos pos) {
++        return this.getBlockState(pos);
++    }
++
+     FluidState getFluidState(BlockPos pos);
+ 
++    default @Nullable FluidState getFluidIfLoaded(final BlockPos pos) {
++        return this.getFluidState(pos);
++    }
++
+     default int getLightEmission(final BlockPos pos) {
+         return this.getBlockState(pos).getLightEmission();
+     }
+diff --git a/net/minecraft/world/level/EmptyBlockGetter.java b/net/minecraft/world/level/EmptyBlockGetter.java
+index 0c9c929c16903010289b48163da3d03e1b5e9662..da1c010bb16394b5ad9e33c7ab9823d3a45671ee 100644
+--- a/net/minecraft/world/level/EmptyBlockGetter.java
++++ b/net/minecraft/world/level/EmptyBlockGetter.java
+@@ -21,11 +21,21 @@ public enum EmptyBlockGetter implements BlockGetter {
+         return Blocks.AIR.defaultBlockState();
+     }
+ 
++    @Override
++    public @Nullable BlockState getBlockStateIfLoaded(final BlockPos pos) {
++        return Blocks.AIR.defaultBlockState();
++    }
++
+     @Override
+     public FluidState getFluidState(final BlockPos pos) {
+         return Fluids.EMPTY.defaultFluidState();
+     }
+ 
++    @Override
++    public @Nullable FluidState getFluidIfLoaded(final BlockPos pos) {
++        return Fluids.EMPTY.defaultFluidState();
++    }
++
+     @Override
+     public int getMinY() {
+         return 0;
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index 96705a2ad7b1b54fb584c175aaa20d04b60a27de..1cb733fc86cb1b5dbe2f58eaa3fa1a5d08dc8b4a 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -222,6 +222,19 @@ public abstract class Level implements LevelAccessor, AutoCloseable {
+         return (LevelChunk)this.getChunk(chunkX, chunkZ, ChunkStatus.FULL);
+     }
+ 
++    @Override
++    public final @Nullable ChunkAccess getChunkIfLoadedImmediately(final int chunkX, final int chunkZ) {
++        return this.getChunkSource().getChunkNow(chunkX, chunkZ);
++    }
++
++    public final @Nullable LevelChunk getChunkIfLoaded(final int chunkX, final int chunkZ) {
++        return this.getChunkSource().getChunkNow(chunkX, chunkZ);
++    }
++
++    public final @Nullable LevelChunk getChunkIfLoaded(final BlockPos pos) {
++        return this.getChunkIfLoaded(SectionPos.blockToSectionCoord(pos.getX()), SectionPos.blockToSectionCoord(pos.getZ()));
++    }
++
+     @Override
+     public @Nullable ChunkAccess getChunk(final int chunkX, final int chunkZ, final ChunkStatus status, final boolean loadOrGenerate) {
+         ChunkAccess chunk = this.getChunkSource().getChunk(chunkX, chunkZ, status, loadOrGenerate);
+@@ -402,6 +415,16 @@ public abstract class Level implements LevelAccessor, AutoCloseable {
+         return chunk.getBlockState(pos);
+     }
+ 
++    @Override
++    public final @Nullable BlockState getBlockStateIfLoaded(final BlockPos pos) {
++        if (!this.isInValidBounds(pos)) {
++            return Blocks.VOID_AIR.defaultBlockState();
++        }
++
++        LevelChunk chunk = this.getChunkIfLoaded(pos);
++        return chunk == null ? null : chunk.getBlockState(pos);
++    }
++
+     @Override
+     public FluidState getFluidState(final BlockPos pos) {
+         if (!this.isInValidBounds(pos)) {
+@@ -412,6 +435,21 @@ public abstract class Level implements LevelAccessor, AutoCloseable {
+         return chunk.getFluidState(pos);
+     }
+ 
++    @Override
++    public final @Nullable FluidState getFluidIfLoaded(final BlockPos pos) {
++        if (!this.isInValidBounds(pos)) {
++            return Fluids.EMPTY.defaultFluidState();
++        }
++
++        LevelChunk chunk = this.getChunkIfLoaded(pos);
++        return chunk == null ? null : chunk.getFluidState(pos);
++    }
++
++    @Override
++    public final boolean isLoadedAndInBounds(final BlockPos pos) {
++        return this.getWorldBorder().isWithinBounds(pos) && this.getChunkIfLoaded(pos) != null;
++    }
++
+     public boolean isBrightOutside() {
+         return !this.dimensionType().hasFixedTime() && this.skyDarken < 4;
+     }
+diff --git a/net/minecraft/world/level/LevelReader.java b/net/minecraft/world/level/LevelReader.java
+index 8862e3dfd1054ef1279e9e950f6a3264a31a6d1f..5b5bcdcd315849124c6d352021a841d341396fac 100644
+--- a/net/minecraft/world/level/LevelReader.java
++++ b/net/minecraft/world/level/LevelReader.java
+@@ -26,6 +26,14 @@ import org.jspecify.annotations.Nullable;
+ public interface LevelReader extends BlockAndLightGetter, CollisionGetter, SignalGetter, BiomeManager.NoiseBiomeSource {
+     @Nullable ChunkAccess getChunk(final int chunkX, final int chunkZ, final ChunkStatus targetStatus, final boolean loadOrGenerate);
+ 
++    default @Nullable ChunkAccess getChunkIfLoadedImmediately(final int chunkX, final int chunkZ) {
++        return this.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
++    }
++
++    default @Nullable ChunkAccess getChunkIfLoadedImmediately(final BlockPos pos) {
++        return this.getChunkIfLoadedImmediately(SectionPos.blockToSectionCoord(pos.getX()), SectionPos.blockToSectionCoord(pos.getZ()));
++    }
++
+     @Deprecated
+     boolean hasChunk(int chunkX, int chunkZ);
+ 
+@@ -184,6 +192,14 @@ public interface LevelReader extends BlockAndLightGetter, CollisionGetter, Signa
+         return this.hasChunkAt(pos.getX(), pos.getZ());
+     }
+ 
++    default boolean isLoadedAndInBounds(final BlockPos pos) {
++        return this.getWorldBorder().isWithinBounds(pos) && this.getChunkIfLoadedImmediately(pos) != null;
++    }
++
++    default @Nullable BlockState getBlockStateIfLoadedAndInBounds(final BlockPos pos) {
++        return this.getWorldBorder().isWithinBounds(pos) ? this.getBlockStateIfLoaded(pos) : null;
++    }
++
+     @Deprecated
+     default boolean hasChunksAt(final BlockPos pos0, final BlockPos pos1) {
+         return this.hasChunksAt(pos0.getX(), pos0.getY(), pos0.getZ(), pos1.getX(), pos1.getY(), pos1.getZ());
+diff --git a/net/minecraft/world/level/chunk/ChunkAccess.java b/net/minecraft/world/level/chunk/ChunkAccess.java
+index 144a6f621af671826a43a629f162ddeb4f58f2f8..ce8bbe0c3f07164c3acce909fecbfbb705dadd2e 100644
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -65,6 +65,9 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
+     private volatile boolean unsaved;
+     private volatile boolean isLightCorrect;
+     protected final ChunkPos chunkPos;
++    public final long coordinateKey;
++    public final int locX;
++    public final int locZ;
+     private long inhabitedTime;
+     @Deprecated
+     private @Nullable BiomeGenerationSettings carverBiomeSettings;
+@@ -90,6 +93,9 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
+         final @Nullable BlendingData blendingData
+     ) {
+         this.chunkPos = chunkPos;
++        this.locX = chunkPos.x();
++        this.locZ = chunkPos.z();
++        this.coordinateKey = ChunkPos.pack(this.locX, this.locZ);
+         this.upgradeData = upgradeData;
+         this.levelHeightAccessor = levelHeightAccessor;
+         this.sections = new LevelChunkSection[levelHeightAccessor.getSectionsCount()];
+@@ -120,6 +126,8 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
+         return GameEventListenerRegistry.NOOP;
+     }
+ 
++    public abstract BlockState getBlockState(int x, int y, int z);
++
+     public @Nullable BlockState setBlockState(final BlockPos pos, final BlockState state) {
+         return this.setBlockState(pos, state, Block.UPDATE_ALL);
+     }
+diff --git a/net/minecraft/world/level/chunk/EmptyLevelChunk.java b/net/minecraft/world/level/chunk/EmptyLevelChunk.java
+index dc2b30d592b0a93f38ad485380c0a1c233d2b3ed..6f55966f7bd8b051059e64bd4982b48ffc633499 100644
+--- a/net/minecraft/world/level/chunk/EmptyLevelChunk.java
++++ b/net/minecraft/world/level/chunk/EmptyLevelChunk.java
+@@ -22,6 +22,11 @@ public class EmptyLevelChunk extends LevelChunk {
+         this.biome = biome;
+     }
+ 
++    @Override
++    public BlockState getBlockState(final int x, final int y, final int z) {
++        return Blocks.VOID_AIR.defaultBlockState();
++    }
++
+     @Override
+     public BlockState getBlockState(final BlockPos pos) {
+         return Blocks.VOID_AIR.defaultBlockState();
+diff --git a/net/minecraft/world/level/chunk/ImposterProtoChunk.java b/net/minecraft/world/level/chunk/ImposterProtoChunk.java
+index ee6a059fac3907efe5ea5ae66d3c4d6f88998113..34ed978c108ff0a05fd6a697105ce2580276f8ed 100644
+--- a/net/minecraft/world/level/chunk/ImposterProtoChunk.java
++++ b/net/minecraft/world/level/chunk/ImposterProtoChunk.java
+@@ -44,6 +44,11 @@ public class ImposterProtoChunk extends ProtoChunk {
+         return this.wrapped.getBlockEntity(pos);
+     }
+ 
++    @Override
++    public BlockState getBlockState(final int x, final int y, final int z) {
++        return this.wrapped.getBlockState(x, y, z);
++    }
++
+     @Override
+     public BlockState getBlockState(final BlockPos pos) {
+         return this.wrapped.getBlockState(pos);
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+index 6efd444a0abfb86cc3a9ea86ebb6172d5b887a5d..e382411103841dad64a43ade232160baea355cd6 100644
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -205,10 +205,11 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource {
+     }
+ 
+     @Override
+-    public BlockState getBlockState(final BlockPos pos) {
+-        int x = pos.getX();
+-        int y = pos.getY();
+-        int z = pos.getZ();
++    public BlockState getBlockState(final int x, final int y, final int z) {
++        return this.getBlockStateFinal(x, y, z);
++    }
++
++    public BlockState getBlockStateFinal(final int x, final int y, final int z) {
+         if (this.level.isDebug()) {
+             BlockState blockState = null;
+             if (y == 60) {
+@@ -220,23 +221,30 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource {
+             }
+ 
+             return blockState == null ? Blocks.AIR.defaultBlockState() : blockState;
+-        } else {
+-            try {
+-                int sectionIndex = this.getSectionIndex(y);
+-                if (sectionIndex >= 0 && sectionIndex < this.sections.length) {
+-                    LevelChunkSection currentSection = this.sections[sectionIndex];
+-                    if (!currentSection.hasOnlyAir()) {
+-                        return currentSection.getBlockState(x & 15, y & 15, z & 15);
+-                    }
+-                }
++        }
+ 
+-                return Blocks.AIR.defaultBlockState();
+-            } catch (Throwable t) {
+-                CrashReport report = CrashReport.forThrowable(t, "Getting block state");
+-                CrashReportCategory category = report.addCategory("Block being got");
+-                category.setDetail("Location", () -> CrashReportCategory.formatLocation(this, x, y, z));
+-                throw new ReportedException(report);
+-            }
++        int sectionIndex = this.getSectionIndex(y);
++        if (sectionIndex < 0 || sectionIndex >= this.sections.length) {
++            return Blocks.AIR.defaultBlockState();
++        }
++
++        LevelChunkSection section = this.sections[sectionIndex];
++        if (section.hasOnlyAir()) {
++            return Blocks.AIR.defaultBlockState();
++        }
++
++        return section.getBlockState((y & 15) << 8 | (z & 15) << 4 | x & 15);
++    }
++
++    @Override
++    public BlockState getBlockState(final BlockPos pos) {
++        try {
++            return this.getBlockStateFinal(pos.getX(), pos.getY(), pos.getZ());
++        } catch (Throwable t) {
++            CrashReport report = CrashReport.forThrowable(t, "Getting block state");
++            CrashReportCategory category = report.addCategory("Block being got");
++            category.setDetail("Location", () -> CrashReportCategory.formatLocation(this, pos.getX(), pos.getY(), pos.getZ()));
++            throw new ReportedException(report);
+         }
+     }
+ 
+@@ -251,7 +259,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource {
+             if (sectionIndex >= 0 && sectionIndex < this.sections.length) {
+                 LevelChunkSection currentSection = this.sections[sectionIndex];
+                 if (!currentSection.hasOnlyAir()) {
+-                    return currentSection.getFluidState(x & 15, y & 15, z & 15);
++                    return currentSection.getBlockState((y & 15) << 8 | (z & 15) << 4 | x & 15).getFluidState();
+                 }
+             }
+ 
+@@ -264,6 +272,16 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource {
+         }
+     }
+ 
++    @Override
++    public final @Nullable BlockState getBlockStateIfLoaded(final BlockPos pos) {
++        return this.getBlockState(pos);
++    }
++
++    @Override
++    public final @Nullable FluidState getFluidIfLoaded(final BlockPos pos) {
++        return this.getFluidState(pos);
++    }
++
+     @Override
+     public @Nullable BlockState setBlockState(final BlockPos pos, final BlockState state, final @Block.UpdateFlags int flags) {
+         int y = pos.getY();
+diff --git a/net/minecraft/world/level/chunk/LevelChunkSection.java b/net/minecraft/world/level/chunk/LevelChunkSection.java
+index 421d037bb1f098aa2006f134043f9dd58979b9b6..802b77ae87bc52d75c9f44874e4803660ec10259 100644
+--- a/net/minecraft/world/level/chunk/LevelChunkSection.java
++++ b/net/minecraft/world/level/chunk/LevelChunkSection.java
+@@ -49,6 +49,10 @@ public class LevelChunkSection {
+         return this.states.get(sectionX, sectionY, sectionZ);
+     }
+ 
++    public BlockState getBlockState(final int index) {
++        return this.states.get(index);
++    }
++
+     public FluidState getFluidState(final int sectionX, final int sectionY, final int sectionZ) {
+         return this.states.get(sectionX, sectionY, sectionZ).getFluidState();
+     }
+diff --git a/net/minecraft/world/level/chunk/ProtoChunk.java b/net/minecraft/world/level/chunk/ProtoChunk.java
+index e460757018c4e38f1805cfd18dfde96e0c56dd75..23e107d50bbe765bd0fd9bc94c7256b6e1144599 100644
+--- a/net/minecraft/world/level/chunk/ProtoChunk.java
++++ b/net/minecraft/world/level/chunk/ProtoChunk.java
+@@ -91,14 +91,18 @@ public class ProtoChunk extends ChunkAccess {
+     }
+ 
+     @Override
+-    public BlockState getBlockState(final BlockPos pos) {
+-        int y = pos.getY();
++    public BlockState getBlockState(final int x, final int y, final int z) {
+         if (this.isOutsideBuildHeight(y)) {
+             return Blocks.VOID_AIR.defaultBlockState();
+         }
+ 
+         LevelChunkSection section = this.getSection(this.getSectionIndex(y));
+-        return section.hasOnlyAir() ? Blocks.AIR.defaultBlockState() : section.getBlockState(pos.getX() & 15, y & 15, pos.getZ() & 15);
++        return section.hasOnlyAir() ? Blocks.AIR.defaultBlockState() : section.getBlockState(x & 15, y & 15, z & 15);
++    }
++
++    @Override
++    public BlockState getBlockState(final BlockPos pos) {
++        return this.getBlockState(pos.getX(), pos.getY(), pos.getZ());
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+index 3447da057f800de67d9daaa457b316fbbe34e41c..9f4dc4ea4cb62438fa504680e2c20f8bab8ba160 100644
+--- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
++++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+@@ -9,6 +9,7 @@ import it.unimi.dsi.fastutil.shorts.ShortArrayList;
+ import it.unimi.dsi.fastutil.shorts.ShortList;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.Collections;
+ import java.util.EnumMap;
+ import java.util.EnumSet;
+ import java.util.List;
+@@ -337,11 +338,13 @@ public record SerializableChunkData(
+         }
+ 
+         ChunkPos pos = chunk.getPos();
+-        List<SerializableChunkData.SectionData> sectionData = new ArrayList<>();
+         LevelChunkSection[] chunkSections = chunk.getSections();
+         LevelLightEngine lightEngine = level.getChunkSource().getLightEngine();
++        int minLightSection = lightEngine.getMinLightSection();
++        int maxLightSection = lightEngine.getMaxLightSection();
++        List<SerializableChunkData.SectionData> sectionData = new ArrayList<>(maxLightSection - minLightSection);
+ 
+-        for (int sectionY = lightEngine.getMinLightSection(); sectionY < lightEngine.getMaxLightSection(); sectionY++) {
++        for (int sectionY = minLightSection; sectionY < maxLightSection; sectionY++) {
+             int sectionIndex = chunk.getSectionIndexFromSectionY(sectionY);
+             boolean hasSection = sectionIndex >= 0 && sectionIndex < chunkSections.length;
+             DataLayer sourceBlockLight = lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(SectionPos.of(pos, sectionY));
+@@ -354,20 +357,28 @@ public record SerializableChunkData(
+             }
+         }
+ 
+-        List<CompoundTag> blockEntities = new ArrayList<>(chunk.getBlockEntitiesPos().size());
++        int blockEntityCount = chunk.getBlockEntitiesPos().size();
++        List<CompoundTag> blockEntities = blockEntityCount == 0 ? Collections.emptyList() : new ArrayList<>(blockEntityCount);
+ 
+-        for (BlockPos blockPos : chunk.getBlockEntitiesPos()) {
+-            CompoundTag blockEntityTag = chunk.getBlockEntityNbtForSaving(blockPos, level.registryAccess());
+-            if (blockEntityTag != null) {
+-                blockEntities.add(blockEntityTag);
++        if (blockEntityCount > 0) {
++            for (BlockPos blockPos : chunk.getBlockEntitiesPos()) {
++                CompoundTag blockEntityTag = chunk.getBlockEntityNbtForSaving(blockPos, level.registryAccess());
++                if (blockEntityTag != null) {
++                    blockEntities.add(blockEntityTag);
++                }
+             }
+         }
+ 
+-        List<CompoundTag> entities = new ArrayList<>();
++        List<CompoundTag> entities = Collections.emptyList();
+         long[] carvingMask = null;
+         if (chunk.getPersistedStatus().getChunkType() == ChunkType.PROTOCHUNK) {
+             ProtoChunk protoChunk = (ProtoChunk)chunk;
+-            entities.addAll(protoChunk.getEntities());
++            List<CompoundTag> protoEntities = protoChunk.getEntities();
++            if (!protoEntities.isEmpty()) {
++                entities = new ArrayList<>(protoEntities.size());
++                entities.addAll(protoEntities);
++            }
++
+             CarvingMask existingMask = protoChunk.getCarvingMask();
+             if (existingMask != null) {
+                 carvingMask = existingMask.toArray();
+@@ -384,9 +395,15 @@ public record SerializableChunkData(
+         }
+ 
+         ChunkAccess.PackedTicks ticksForSerialization = chunk.getTicksForSerialization(level.getGameTime());
+-        ShortList[] postProcessingSections = Arrays.stream(chunk.getPostProcessing())
+-            .map(shorts -> shorts != null && !shorts.isEmpty() ? new ShortArrayList(shorts) : null)
+-            .toArray(ShortList[]::new);
++        ShortList[] postProcessing = chunk.getPostProcessing();
++        ShortList[] postProcessingSections = new ShortList[postProcessing.length];
++        for (int i = 0; i < postProcessing.length; i++) {
++            ShortList shorts = postProcessing[i];
++            if (shorts != null && !shorts.isEmpty()) {
++                postProcessingSections[i] = new ShortArrayList(shorts);
++            }
++        }
++
+         CompoundTag structureData = packStructureData(StructurePieceSerializationContext.fromLevel(level), pos, chunk.getAllStarts(), chunk.getAllReferences());
+         return new SerializableChunkData(
+             level.palettedContainerFactory(),

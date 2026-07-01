@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC20018 <winme2001@outlook.com>
+Date: Wed, 1 Jul 2026 21:40:31 +0800
+Subject: [PATCH] Implement async chunk packet preparation
+
+
+diff --git a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+index 5980cbc1e8aa682bca6cfe3096a637e454258e46..c7e6b630803e78625600a99b31807385d21921f4 100644
+--- a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
++++ b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+@@ -34,17 +34,14 @@ public class ClientboundLevelChunkPacketData {
+     private final List<ClientboundLevelChunkPacketData.BlockEntityInfo> blockEntitiesData;
+ 
+     public ClientboundLevelChunkPacketData(final LevelChunk levelChunk) {
+-        this.heightmaps = levelChunk.getHeightmaps()
+-            .stream()
+-            .filter(entryx -> ((Heightmap.Types)entryx.getKey()).sendToClient())
+-            .collect(Collectors.toMap(Entry::getKey, entryx -> (long[])((Heightmap)entryx.getValue()).getRawData().clone()));
++        this(levelChunk, fand$snapshot(levelChunk));
++    }
++
++    public ClientboundLevelChunkPacketData(final LevelChunk levelChunk, final ClientboundLevelChunkPacketData.FandSnapshot snapshot) {
++        this.heightmaps = snapshot.heightmaps;
+         this.buffer = new byte[calculateChunkSize(levelChunk)];
+         extractChunkData(new FriendlyByteBuf(this.getWriteBuffer()), levelChunk);
+-        this.blockEntitiesData = Lists.newArrayList();
+-
+-        for (Entry<BlockPos, BlockEntity> entry : levelChunk.getBlockEntities().entrySet()) {
+-            this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(entry.getValue()));
+-        }
++        this.blockEntitiesData = snapshot.blockEntitiesData;
+     }
+ 
+     public ClientboundLevelChunkPacketData(final RegistryFriendlyByteBuf input, final int x, final int z) {
+@@ -117,6 +114,32 @@ public class ClientboundLevelChunkPacketData {
+         return this.heightmaps;
+     }
+ 
++    public static ClientboundLevelChunkPacketData.FandSnapshot fand$snapshot(final LevelChunk levelChunk) {
++        Map<Heightmap.Types, long[]> heightmaps = levelChunk.getHeightmaps()
++            .stream()
++            .filter(entryx -> ((Heightmap.Types)entryx.getKey()).sendToClient())
++            .collect(Collectors.toMap(Entry::getKey, entryx -> (long[])((Heightmap)entryx.getValue()).getRawData().clone()));
++        List<ClientboundLevelChunkPacketData.BlockEntityInfo> blockEntitiesData = Lists.newArrayList();
++
++        for (Entry<BlockPos, BlockEntity> entry : levelChunk.getBlockEntities().entrySet()) {
++            blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(entry.getValue()));
++        }
++        return new ClientboundLevelChunkPacketData.FandSnapshot(heightmaps, List.copyOf(blockEntitiesData));
++    }
++
++    public static final class FandSnapshot {
++        private final Map<Heightmap.Types, long[]> heightmaps;
++        private final List<ClientboundLevelChunkPacketData.BlockEntityInfo> blockEntitiesData;
++
++        private FandSnapshot(
++            final Map<Heightmap.Types, long[]> heightmaps,
++            final List<ClientboundLevelChunkPacketData.BlockEntityInfo> blockEntitiesData
++        ) {
++            this.heightmaps = heightmaps;
++            this.blockEntitiesData = blockEntitiesData;
++        }
++    }
++
+     private static class BlockEntityInfo {
+         public static final StreamCodec<RegistryFriendlyByteBuf, ClientboundLevelChunkPacketData.BlockEntityInfo> STREAM_CODEC = StreamCodec.ofMember(
+             ClientboundLevelChunkPacketData.BlockEntityInfo::write, ClientboundLevelChunkPacketData.BlockEntityInfo::new
+diff --git a/net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket.java b/net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket.java
+index 1c72fb91a3992c1e9ffdeafad3f7e4c7fe2747b2..7aaf068104af0cddbdf411e88addd841c9b35da3 100644
+--- a/net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket.java
++++ b/net/minecraft/network/protocol/game/ClientboundLevelChunkWithLightPacket.java
+@@ -32,6 +32,18 @@ public class ClientboundLevelChunkWithLightPacket implements Packet<ClientGamePa
+         this.lightData = new ClientboundLightUpdatePacketData(chunkPos, lightEngine, skyChangedLightSectionFilter, blockChangedLightSectionFilter);
+     }
+ 
++    public ClientboundLevelChunkWithLightPacket(
++        final LevelChunk levelChunk,
++        final ClientboundLevelChunkPacketData.FandSnapshot chunkSnapshot,
++        final ClientboundLightUpdatePacketData lightData
++    ) {
++        ChunkPos chunkPos = levelChunk.getPos();
++        this.x = chunkPos.x();
++        this.z = chunkPos.z();
++        this.chunkData = new ClientboundLevelChunkPacketData(levelChunk, chunkSnapshot);
++        this.lightData = lightData;
++    }
++
+     private ClientboundLevelChunkWithLightPacket(final RegistryFriendlyByteBuf input) {
+         this.x = input.readInt();
+         this.z = input.readInt();
+diff --git a/net/minecraft/server/network/PlayerChunkSender.java b/net/minecraft/server/network/PlayerChunkSender.java
+index cc5c970a4839b59b14b069ed0ce3a34d3283336a..2e42fe61a4e59c6fa9bc53f492888b2c59dce9a1 100644
+--- a/net/minecraft/server/network/PlayerChunkSender.java
++++ b/net/minecraft/server/network/PlayerChunkSender.java
+@@ -32,6 +32,7 @@ public class PlayerChunkSender {
+     private float batchQuota;
+     private int unacknowledgedBatches;
+     private int maxUnacknowledgedBatches = 1;
++    private io.fand.server.chunk.AsyncChunkPacketSender.PendingBatch fand$pendingAsyncChunkBatch;
+ 
+     public PlayerChunkSender(final boolean memoryConnection) {
+         this.memoryConnection = memoryConnection;
+@@ -42,7 +43,14 @@ public class PlayerChunkSender {
+     }
+ 
+     public void dropChunk(final ServerPlayer player, final ChunkPos pos) {
+-        if (!this.pendingChunks.remove(pos.pack()) && player.isAlive()) {
++        long key = pos.pack();
++        if (this.fand$pendingAsyncChunkBatch != null) {
++            this.fand$pendingAsyncChunkBatch.drop(key);
++            if (this.fand$pendingAsyncChunkBatch.empty()) {
++                this.fand$pendingAsyncChunkBatch = null;
++            }
++        }
++        if (!this.pendingChunks.remove(key) && player.isAlive()) {
+             player.connection.send(new ClientboundForgetLevelChunkPacket(pos));
+         }
+     }
+@@ -52,20 +60,32 @@ public class PlayerChunkSender {
+             float maxBatchSize = Math.max(1.0F, this.desiredChunksPerTick);
+             this.batchQuota = Math.min(this.batchQuota + this.desiredChunksPerTick, maxBatchSize);
+             if (!(this.batchQuota < 1.0F)) {
+-                if (!this.pendingChunks.isEmpty()) {
++                io.fand.server.chunk.AsyncChunkPacketSender asyncChunkPackets = io.fand.server.hooks.FandHooks.asyncChunkPacketSender();
++                if (asyncChunkPackets != null) {
++                    this.fand$pollAsyncChunkBatch(player.connection, asyncChunkPackets);
++                } else if (this.fand$pendingAsyncChunkBatch != null) {
++                    this.fand$pendingAsyncChunkBatch.restoreTo(this.pendingChunks);
++                    this.fand$pendingAsyncChunkBatch = null;
++                }
++                if (!this.pendingChunks.isEmpty() && this.fand$pendingAsyncChunkBatch == null) {
+                     ServerLevel level = player.level();
+                     ChunkMap chunkMap = level.getChunkSource().chunkMap;
+                     List<LevelChunk> chunksToSend = this.collectChunksToSend(chunkMap, player.chunkPosition());
+                     if (!chunksToSend.isEmpty()) {
+                         ServerGamePacketListenerImpl connection = player.connection;
+-                        this.unacknowledgedBatches++;
+-                        connection.send(ClientboundChunkBatchStartPacket.INSTANCE);
+-
+-                        for (LevelChunk chunk : chunksToSend) {
+-                            sendChunk(connection, level, chunk);
++                        if (asyncChunkPackets != null) {
++                            this.fand$pendingAsyncChunkBatch = asyncChunkPackets.submit(player, chunksToSend);
+                         }
++                        if (this.fand$pendingAsyncChunkBatch == null) {
++                            this.unacknowledgedBatches++;
++                            connection.send(ClientboundChunkBatchStartPacket.INSTANCE);
++
++                            for (LevelChunk chunk : chunksToSend) {
++                                sendChunk(connection, level, chunk);
++                            }
+ 
+-                        connection.send(new ClientboundChunkBatchFinishedPacket(chunksToSend.size()));
++                            connection.send(new ClientboundChunkBatchFinishedPacket(chunksToSend.size()));
++                        }
+                         this.batchQuota = this.batchQuota - chunksToSend.size();
+                     }
+                 }
+@@ -73,6 +93,25 @@ public class PlayerChunkSender {
+         }
+     }
+ 
++    private void fand$pollAsyncChunkBatch(
++        final ServerGamePacketListenerImpl connection,
++        final io.fand.server.chunk.AsyncChunkPacketSender asyncChunkPackets
++    ) {
++        io.fand.server.chunk.AsyncChunkPacketSender.PendingBatch batch = this.fand$pendingAsyncChunkBatch;
++        if (batch == null || !batch.ready()) {
++            return;
++        }
++        this.fand$pendingAsyncChunkBatch = null;
++        if (batch.failed()) {
++            batch.restoreTo(this.pendingChunks);
++            return;
++        }
++        int sent = asyncChunkPackets.sendIfReady(connection, batch);
++        if (sent > 0) {
++            this.unacknowledgedBatches++;
++        }
++    }
++
+     private static void sendChunk(final ServerGamePacketListenerImpl connection, final ServerLevel level, final LevelChunk chunk) {
+         connection.send(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null));
+         ChunkPos pos = chunk.getPos();
+@@ -126,6 +165,7 @@ public class PlayerChunkSender {
+     }
+ 
+     public boolean isPending(final long pos) {
+-        return this.pendingChunks.contains(pos);
++        return this.pendingChunks.contains(pos)
++            || this.fand$pendingAsyncChunkBatch != null && this.fand$pendingAsyncChunkBatch.contains(pos);
+     }
+ }

@@ -1,0 +1,377 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MC20018 <winme2001@outlook.com>
+Date: Wed, 1 Jul 2026 19:20:54 +0800
+Subject: [PATCH] Optimize hot-path Minecraft source handling
+
+
+diff --git a/net/minecraft/network/VarInt.java b/net/minecraft/network/VarInt.java
+index 3e62f43edecb63921afeec4fa97c4b6ae5350d76..a2a95ac02d15ba1816b811c17f74c1c76c478d6a 100644
+--- a/net/minecraft/network/VarInt.java
++++ b/net/minecraft/network/VarInt.java
+@@ -7,15 +7,18 @@ public class VarInt {
+     private static final int DATA_BITS_MASK = 127;
+     private static final int CONTINUATION_BIT_MASK = 128;
+     private static final int DATA_BITS_PER_BYTE = 7;
++    private static final int[] EXACT_BYTE_LENGTHS = new int[33];
+ 
+-    public static int getByteSize(final int value) {
+-        for (int i = 1; i < MAX_VARINT_SIZE; i++) {
+-            if ((value & -1 << i * DATA_BITS_PER_BYTE) == 0) {
+-                return i;
+-            }
++    static {
++        for (int i = 0; i < 32; i++) {
++            EXACT_BYTE_LENGTHS[i] = (32 - i + 6) / 7;
+         }
+ 
+-        return MAX_VARINT_SIZE;
++        EXACT_BYTE_LENGTHS[32] = 1;
++    }
++
++    public static int getByteSize(final int value) {
++        return EXACT_BYTE_LENGTHS[Integer.numberOfLeadingZeros(value)];
+     }
+ 
+     public static boolean hasContinuationBit(final byte in) {
+@@ -39,12 +42,36 @@ public class VarInt {
+     }
+ 
+     public static ByteBuf write(final ByteBuf output, int value) {
+-        while ((value & -128) != 0) {
+-            output.writeByte(value & DATA_BITS_MASK | CONTINUATION_BIT_MASK);
+-            value >>>= DATA_BITS_PER_BYTE;
++        if ((value & 0xFFFFFF80) == 0) {
++            output.writeByte(value);
++        } else if ((value & 0xFFFFC000) == 0) {
++            int w = (value & 0x7F) << 8
++                | (value >>> 7)
++                | 0x00008000;
++            output.writeShort(w);
++        } else if ((value & 0xFFE00000) == 0) {
++            int w = (value & 0x7F) << 16
++                | (value & 0x3F80) << 1
++                | (value >>> 14)
++                | 0x00808000;
++            output.writeMedium(w);
++        } else if ((value & 0xF0000000) == 0) {
++            int w = (value & 0x7F) << 24
++                | ((value & 0x3F80) << 9)
++                | (value & 0x1FC000) >> 6
++                | (value >>> 21)
++                | 0x80808000;
++            output.writeInt(w);
++        } else {
++            int w = (value & 0x7F) << 24
++                | (value & 0x3F80) << 9
++                | (value & 0x1FC000) >> 6
++                | ((value >>> 21) & 0x7F)
++                | 0x80808080;
++            output.writeInt(w);
++            output.writeByte(value >>> 28);
+         }
+ 
+-        output.writeByte(value);
+         return output;
+     }
+ }
+diff --git a/net/minecraft/network/VarLong.java b/net/minecraft/network/VarLong.java
+index 913442a641134fed4ad5669f190c508c3109ab6a..9d7541bf7527dc5ad81682b9577b84a2d226d633 100644
+--- a/net/minecraft/network/VarLong.java
++++ b/net/minecraft/network/VarLong.java
+@@ -7,15 +7,18 @@ public class VarLong {
+     private static final int DATA_BITS_MASK = 127;
+     private static final int CONTINUATION_BIT_MASK = 128;
+     private static final int DATA_BITS_PER_BYTE = 7;
++    private static final int[] EXACT_BYTE_LENGTHS = new int[65];
+ 
+-    public static int getByteSize(final long value) {
+-        for (int i = 1; i < MAX_VARLONG_SIZE; i++) {
+-            if ((value & -1L << i * DATA_BITS_PER_BYTE) == 0L) {
+-                return i;
+-            }
++    static {
++        for (int i = 0; i < 64; i++) {
++            EXACT_BYTE_LENGTHS[i] = (64 - i + 6) / 7;
+         }
+ 
+-        return MAX_VARLONG_SIZE;
++        EXACT_BYTE_LENGTHS[64] = 1;
++    }
++
++    public static int getByteSize(final long value) {
++        return EXACT_BYTE_LENGTHS[Long.numberOfLeadingZeros(value)];
+     }
+ 
+     public static boolean hasContinuationBit(final byte in) {
+@@ -39,12 +42,119 @@ public class VarLong {
+     }
+ 
+     public static ByteBuf write(final ByteBuf output, long value) {
+-        while ((value & -128L) != 0L) {
+-            output.writeByte((int)(value & DATA_BITS_MASK) | CONTINUATION_BIT_MASK);
+-            value >>>= DATA_BITS_PER_BYTE;
++        if ((value & 0xFFFFFFFFFFFFFF80L) == 0) {
++            output.writeByte((int)value);
++        } else if (value < 0) {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            long nonLeast7Bits = value >>> 28;
++            int secondLeast7bits = (int)(nonLeast7Bits & 0xFFFFFFFL);
++            int w2 = (secondLeast7bits & 0x7F) << 24
++                | (secondLeast7bits & 0x3F80) << 9
++                | (secondLeast7bits & 0x1FC000) >> 6
++                | (secondLeast7bits >>> 21)
++                | 0x80808080;
++            int thirdLeast7Bits = (int)(nonLeast7Bits >>> 28);
++            int w3 = (thirdLeast7Bits & 0x7F) << 8
++                | (thirdLeast7Bits >>> 7)
++                | 0x00008000;
++            output.writeInt(w);
++            output.writeInt(w2);
++            output.writeShort(w3);
++        } else if ((value & 0xFFFFFFFFFFFFC000L) == 0) {
++            int least7bits = (int)value;
++            int w = (least7bits & 0x7F) << 8
++                | (least7bits >>> 7)
++                | 0x00008000;
++            output.writeShort(w);
++        } else if ((value & 0xFFFFFFFFFFE00000L) == 0) {
++            int least7bits = (int)value;
++            int w = (least7bits & 0x7F) << 16
++                | (least7bits & 0x3F80) << 1
++                | (least7bits >>> 14)
++                | 0x00808000;
++            output.writeMedium(w);
++        } else if ((value & 0xFFFFFFFFF0000000L) == 0) {
++            int least7bits = (int)value;
++            int w = (least7bits & 0x7F) << 24
++                | ((least7bits & 0x3F80) << 9)
++                | (least7bits & 0x1FC000) >> 6
++                | (least7bits >>> 21)
++                | 0x80808000;
++            output.writeInt(w);
++        } else if ((value & 0xFFFFFFF800000000L) == 0) {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            output.writeInt(w);
++            output.writeByte((int)(value >>> 28));
++        } else if ((value & 0xFFFFFC0000000000L) == 0) {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            int secondLeast7bits = (int)(value >>> 28);
++            int w2 = (secondLeast7bits & 0x7F) << 8
++                | (secondLeast7bits >>> 7)
++                | 0x00008000;
++            output.writeInt(w);
++            output.writeShort(w2);
++        } else if ((value & 0xFFFE000000000000L) == 0) {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            int secondLeast7bits = (int)(value >>> 28);
++            int w2 = (secondLeast7bits & 0x7F) << 16
++                | (secondLeast7bits & 0x3F80) << 1
++                | (secondLeast7bits >>> 14)
++                | 0x00808000;
++            output.writeInt(w);
++            output.writeMedium(w2);
++        } else if ((value & 0xFF00000000000000L) == 0) {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            int secondLeast7bits = (int)(value >>> 28);
++            int w2 = (secondLeast7bits & 0x7F) << 24
++                | ((secondLeast7bits & 0x3F80) << 9)
++                | (secondLeast7bits & 0x1FC000) >> 6
++                | (secondLeast7bits >>> 21)
++                | 0x80808000;
++            output.writeInt(w);
++            output.writeInt(w2);
++        } else {
++            int least7bits = (int)(value & 0xFFFFFFFL);
++            int w = (least7bits & 0x7F) << 24
++                | (least7bits & 0x3F80) << 9
++                | (least7bits & 0x1FC000) >> 6
++                | ((least7bits >>> 21) & 0x7F)
++                | 0x80808080;
++            long nonLeast7Bits = value >>> 28;
++            int secondLeast7bits = (int)(nonLeast7Bits & 0xFFFFFFFL);
++            int w2 = (secondLeast7bits & 0x7F) << 24
++                | ((secondLeast7bits & 0x3F80) << 9)
++                | (secondLeast7bits & 0x1FC000) >> 6
++                | (secondLeast7bits >>> 21)
++                | 0x80808080;
++            output.writeInt(w);
++            output.writeInt(w2);
++            output.writeByte((int)(nonLeast7Bits >>> 28));
+         }
+-
+-        output.writeByte((int)value);
+         return output;
+     }
+ }
+diff --git a/net/minecraft/network/chat/TextColor.java b/net/minecraft/network/chat/TextColor.java
+index 5f42ca0abb3633884c992b537ed466795628b285..c10e61dcc486ea325c69ab47fbb5aeddc311b15c 100644
+--- a/net/minecraft/network/chat/TextColor.java
++++ b/net/minecraft/network/chat/TextColor.java
+@@ -4,14 +4,14 @@ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.DataResult;
+ import com.mojang.serialization.Lifecycle;
+ import java.util.HashMap;
+-import java.util.Locale;
+ import java.util.Map;
+ import java.util.Objects;
+ import net.minecraft.ChatFormatting;
+ import org.jspecify.annotations.Nullable;
+ 
+ public final class TextColor {
+-    private static final String CUSTOM_COLOR_PREFIX = "#";
++    private static final char CUSTOM_COLOR_PREFIX = '#';
++    private static final char[] HEX_DIGITS = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+     public static final Codec<TextColor> CODEC = Codec.STRING.comapFlatMap(TextColor::parseColor, TextColor::serialize);
+     private static final Map<String, TextColor> NAMED_COLORS = new HashMap<>();
+     public static final TextColor BLACK = named("black", 0);
+@@ -58,7 +58,15 @@ public final class TextColor {
+     }
+ 
+     private String formatValue() {
+-        return String.format(Locale.ROOT, "#%06X", this.value);
++        return new String(new char[]{
++            CUSTOM_COLOR_PREFIX,
++            HEX_DIGITS[this.value >> 20 & 0xF],
++            HEX_DIGITS[this.value >> 16 & 0xF],
++            HEX_DIGITS[this.value >> 12 & 0xF],
++            HEX_DIGITS[this.value >> 8 & 0xF],
++            HEX_DIGITS[this.value >> 4 & 0xF],
++            HEX_DIGITS[this.value & 0xF]
++        });
+     }
+ 
+     @Override
+@@ -110,7 +118,7 @@ public final class TextColor {
+     }
+ 
+     public static DataResult<TextColor> parseColor(final String color) {
+-        if (color.startsWith("#")) {
++        if (!color.isEmpty() && color.charAt(0) == CUSTOM_COLOR_PREFIX) {
+             try {
+                 int value = Integer.parseInt(color.substring(1), 16);
+                 return value >= 0 && value <= 16777215
+diff --git a/net/minecraft/world/item/component/BundleContents.java b/net/minecraft/world/item/component/BundleContents.java
+index e3063437db5f04aa5ac6a85b024c092ff27d25e5..248fe0f82a22fe3805c34169b442a4ab7a620c8a 100644
+--- a/net/minecraft/world/item/component/BundleContents.java
++++ b/net/minecraft/world/item/component/BundleContents.java
+@@ -38,8 +38,11 @@ public final class BundleContents implements TooltipComponent {
+     private final Supplier<DataResult<Fraction>> weight;
+ 
+     private BundleContents(final List<ItemStackTemplate> items, final int selectedItem) {
+-        this.items = items;
+-        this.selectedItem = selectedItem;
++        int softLimit = io.fand.server.hooks.FandHooks.bundleContentsSoftLimit();
++        this.items = items.size() > softLimit ? items.subList(0, softLimit) : items;
++        this.selectedItem = selectedItem >= 0 && selectedItem < this.items.size()
++                ? selectedItem
++                : NO_SELECTED_ITEM_INDEX;
+         this.weight = Suppliers.memoize(() -> computeContentWeight(this.items));
+     }
+ 
+diff --git a/net/minecraft/world/item/component/ChargedProjectiles.java b/net/minecraft/world/item/component/ChargedProjectiles.java
+index cff556eebea4ee3c6291ab144e084485a7e39a79..12b4a7f0c45c2daefbc5bc93d27b4396d7a1ed9c 100644
+--- a/net/minecraft/world/item/component/ChargedProjectiles.java
++++ b/net/minecraft/world/item/component/ChargedProjectiles.java
+@@ -20,18 +20,18 @@ import org.slf4j.Logger;
+ 
+ public record ChargedProjectiles(List<ItemStackTemplate> items) implements TooltipProvider {
+     private static final Logger LOGGER = LogUtils.getLogger();
+-    private static final int MAX_SIZE = 1024;
+     public static final ChargedProjectiles EMPTY = new ChargedProjectiles(List.of());
+     public static final Codec<ChargedProjectiles> CODEC = ItemStackTemplate.CODEC
+-        .sizeLimitedListOf(1024)
+-        .xmap(ChargedProjectiles::new, projectiles -> projectiles.items);
++        .listOf()
++        .xmap(ChargedProjectiles::new, ChargedProjectiles::items);
+     public static final StreamCodec<RegistryFriendlyByteBuf, ChargedProjectiles> STREAM_CODEC = ItemStackTemplate.STREAM_CODEC
+-        .apply(ByteBufCodecs.list(1024))
+-        .map(ChargedProjectiles::new, projectiles -> projectiles.items);
++        .apply(ByteBufCodecs.list())
++        .map(ChargedProjectiles::new, ChargedProjectiles::items);
+ 
+     public ChargedProjectiles {
+-        if (items.size() > 1024) {
+-            throw new IllegalArgumentException("Got " + items.size() + " items, but maximum is 1024");
++        int softLimit = io.fand.server.hooks.FandHooks.chargedProjectilesSoftLimit();
++        if (items.size() > softLimit) {
++            items = items.subList(0, softLimit);
+         }
+     }
+ 
+@@ -40,12 +40,13 @@ public record ChargedProjectiles(List<ItemStackTemplate> items) implements Toolt
+     }
+ 
+     public static ChargedProjectiles ofNonEmpty(final List<ItemStack> items) {
+-        List<ItemStackTemplate> list = items.stream().filter(i -> !i.isEmpty()).map(ItemStackTemplate::fromStack).limit(1024L).toList();
+-        if (list.size() != items.size()) {
+-            LOGGER.warn("Tried to load invalid items as charged projectiles");
++        int softLimit = io.fand.server.hooks.FandHooks.chargedProjectilesSoftLimit();
++        List<ItemStackTemplate> list = items.stream().filter(i -> !i.isEmpty()).map(ItemStackTemplate::fromStack).toList();
++        if (list.size() != items.size() || list.size() > softLimit) {
++            LOGGER.warn("Tried to load invalid or oversized charged projectiles");
+         }
+ 
+-        return new ChargedProjectiles(list);
++        return new ChargedProjectiles(list.size() > softLimit ? list.subList(0, softLimit) : list);
+     }
+ 
+     public boolean contains(final Item item) {
+diff --git a/net/minecraft/world/level/material/FluidState.java b/net/minecraft/world/level/material/FluidState.java
+index beca00020c451fca832a7a6e98f909e1e177795e..18232b8d4176e3733aa1a30f637dfd4678e13674 100644
+--- a/net/minecraft/world/level/material/FluidState.java
++++ b/net/minecraft/world/level/material/FluidState.java
+@@ -8,6 +8,8 @@ import net.minecraft.core.TypedInstance;
+ import net.minecraft.core.particles.ParticleOptions;
+ import net.minecraft.core.registries.BuiltInRegistries;
+ import net.minecraft.server.level.ServerLevel;
++import net.minecraft.tags.FluidTags;
++import net.minecraft.tags.TagKey;
+ import net.minecraft.util.RandomSource;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.entity.InsideBlockEffectApplier;
+@@ -109,6 +111,20 @@ public final class FluidState extends StateHolder<Fluid, FluidState> implements
+         return this.getType().builtInRegistryHolder();
+     }
+ 
++    @Override
++    public boolean is(final TagKey<Fluid> tag) {
++        Fluid fluid = this.owner;
++        if (tag == FluidTags.WATER) {
++            return fluid == Fluids.WATER || fluid == Fluids.FLOWING_WATER;
++        }
++
++        if (tag == FluidTags.LAVA) {
++            return fluid == Fluids.LAVA || fluid == Fluids.FLOWING_LAVA;
++        }
++
++        return TypedInstance.super.is(tag);
++    }
++
+     public float getExplosionResistance() {
+         return this.getType().getExplosionResistance();
+     }
